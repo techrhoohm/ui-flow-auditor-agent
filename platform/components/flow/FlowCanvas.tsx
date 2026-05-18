@@ -19,9 +19,16 @@ type Props = {
   edges: Edge[];
   onNodesChange?: OnNodesChange;
   onEdgesChange?: OnEdgesChange;
+  onNodeClick?: (nodeId: string) => void;
 };
 
-export function FlowCanvas({ nodes, edges, onNodesChange, onEdgesChange }: Props) {
+export function FlowCanvas({
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onNodeClick,
+}: Props) {
   const nodeTypes = useMemo(() => ({ screen: ScreenNode }), []);
 
   return (
@@ -31,6 +38,7 @@ export function FlowCanvas({ nodes, edges, onNodesChange, onEdgesChange }: Props
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeClick={(_, n) => onNodeClick?.(n.id)}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}

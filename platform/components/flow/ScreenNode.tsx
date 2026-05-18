@@ -4,6 +4,7 @@ import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { motion } from "framer-motion";
 import type { Severity } from "@/lib/audit-script";
 import type { ScreenNodeData } from "@/lib/fixtures";
+import { MockScreen } from "@/lib/mock-screens";
 
 type ScreenNodeType = Node<ScreenNodeData, "screen">;
 
@@ -34,12 +35,12 @@ const severityFlashBg: Record<Severity, string> = {
   high: "bg-rose-500/30",
 };
 
-export function ScreenNode({ data }: NodeProps<ScreenNodeType>) {
+export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
   const active = !!data.isActive;
   const flash = data.flashSeverity ?? null;
 
   return (
-    <div className="relative">
+    <div className="relative cursor-pointer">
       {active && (
         <motion.span
           aria-hidden
@@ -60,14 +61,10 @@ export function ScreenNode({ data }: NodeProps<ScreenNodeType>) {
           className="!h-1.5 !w-1.5 !border-0 !bg-zinc-500"
         />
 
-        <div className="relative mb-2 h-16 w-full overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-950">
-          <div
-            className="h-full w-full"
-            style={{
-              backgroundImage:
-                "radial-gradient(circle at 30% 30%, rgba(167,139,250,0.18), transparent 60%), repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 6px)",
-            }}
-          />
+        <div className="relative mb-2 flex h-24 w-full items-center justify-center overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-950">
+          <div className="h-full w-[60%]">
+            <MockScreen screenId={id} />
+          </div>
           {flash && (
             <motion.div
               key={`${flash}-${data.issueCount}`}

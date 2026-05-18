@@ -5,14 +5,19 @@ import {
   applyNodeChanges,
   type Node,
 } from "@xyflow/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DetailPanel } from "@/components/detail/DetailPanel";
 import { FlowCanvas } from "@/components/flow/FlowCanvas";
 import { PointingLine } from "@/components/flow/PointingLine";
 import { Nora } from "@/components/nora/Nora";
 import { Sidebar } from "@/components/shell/Sidebar";
 import { Topbar } from "@/components/shell/Topbar";
 import { vitalsAppScript } from "@/lib/audit-script";
-import { useAuditRun, type AuditRunResult } from "@/lib/audit-runner";
+import {
+  useAuditRun,
+  type AuditFinding,
+  type AuditRunResult,
+} from "@/lib/audit-runner";
 import {
   vitalsAppEdges,
   vitalsAppNodes,
@@ -32,6 +37,11 @@ export default function Page() {
 function Dashboard() {
   const [nodes, setNodes] = useState<Node<ScreenNodeData>[]>(vitalsAppNodes);
   const [history, setHistory] = useState<AuditRunResult[]>([]);
+  const [findingsByNode, setFindingsByNode] = useState<
+    Record<string, AuditFinding[]>
+  >({});
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
   const noraAnchorRef = useRef<HTMLDivElement | null>(null);
   const [noraOrigin, setNoraOrigin] = useState<{ x: number; y: number } | null>(
     null
@@ -53,8 +63,7 @@ function Dashboard() {
         data: {
           ...n.data,
           isActive: n.id === run.currentNodeId,
-          flashSeverity:
-            n.id === run.flashNodeId ? run.flashSeverity : null,
+          flashSeverity: n.id === run.flashNodeId ? run.flashSeverity : null,
         },
       }))
     );
@@ -69,6 +78,10 @@ function Dashboard() {
             : n
         )
       );
+      setFindingsByNode((prev) => ({
+        ...prev,
+        [f.nodeId]: [...(prev[f.nodeId] ?? []), f],
+      }));
     });
     return unsub;
   }, [run]);
@@ -96,6 +109,7 @@ function Dashboard() {
   }, []);
 
   const handleStart = useCallback(() => {
+    setFindingsByNode({});
     setNodes((prev) =>
       prev.map((n) => ({
         ...n,
@@ -109,6 +123,11 @@ function Dashboard() {
     );
     run.start();
   }, [run]);
+
+  const selectedNode = useMemo(
+    () => (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null),
+    [selectedNodeId, nodes]
+  );
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
@@ -126,6 +145,7 @@ function Dashboard() {
             nodes={nodes}
             edges={vitalsAppEdges}
             onNodesChange={onNodesChange}
+            onNodeClick={(id) => setSelectedNodeId(id)}
           />
 
           <PointingLine
@@ -139,6 +159,13 @@ function Dashboard() {
           >
             <Nora snapshot={run.snapshot} />
           </div>
+
+          <DetailPanel
+            nodeId={selectedNodeId}
+            data={selectedNode?.data ?? null}
+            findings={selectedNodeId ? findingsByNode[selectedNodeId] ?? [] : []}
+            onClose={() => setSelectedNodeId(null)}
+          />
         </main>
       </div>
     </div>
