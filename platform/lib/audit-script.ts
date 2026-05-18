@@ -18,7 +18,7 @@ export type AuditScript = {
 };
 
 export const vitalsAppScript: AuditScript = {
-  target: "VitalsApp",
+  target: "VitalsApp · demo",
   events: [
     { kind: "start", utterance: "Starting. Six screens.", durationMs: 1400 },
 

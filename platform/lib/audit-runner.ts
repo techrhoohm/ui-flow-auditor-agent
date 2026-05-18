@@ -29,8 +29,10 @@ export type AuditRunState = {
 };
 
 export type UseAuditRun = AuditRunState & {
-  start: () => void;
+  start: (override?: AuditScript) => void;
   stop: () => void;
+  prepare: (utterance: string) => void;
+  fail: (utterance: string) => void;
   onFinding: (cb: (f: AuditFinding) => void) => () => void;
   onComplete: (cb: (r: AuditRunResult) => void) => () => void;
 };
@@ -100,19 +102,52 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
     }));
   }, [script.events.length]);
 
-  const start = useCallback(() => {
+  const prepare = useCallback((utterance: string) => {
     stoppedRef.current = false;
-    const startedAt = Date.now();
-    const findings: AuditFinding[] = [];
+    clearTimers();
+    setState((s) => ({
+      ...s,
+      running: true,
+      currentNodeId: null,
+      progress: { index: 0, total: 0 },
+      snapshot: { state: "scanning", mood: "neutral", utterance },
+      flashNodeId: null,
+      flashSeverity: null,
+    }));
+  }, []);
+
+  const fail = useCallback((utterance: string) => {
+    stoppedRef.current = true;
+    clearTimers();
+    setState((s) => ({
+      ...s,
+      running: false,
+      currentNodeId: null,
+      snapshot: { state: "reporting", mood: "displeased", utterance },
+      flashNodeId: null,
+      flashSeverity: null,
+      progress: { index: 0, total: 0 },
+    }));
+  }, []);
+
+  const start = useCallback(
+    (override?: AuditScript) => {
+      const activeScript = override ?? script;
+      stoppedRef.current = false;
+      const startedAt = Date.now();
+      const findings: AuditFinding[] = [];
 
     setState({
       running: true,
       currentNodeId: null,
-      progress: { index: 0, total: script.events.length },
+      progress: { index: 0, total: activeScript.events.length },
       snapshot: {
         state: "scanning",
         mood: "neutral",
-        utterance: script.events[0]?.kind === "start" ? script.events[0].utterance : "",
+        utterance:
+          activeScript.events[0]?.kind === "start"
+            ? activeScript.events[0].utterance
+            : "",
       },
       flashNodeId: null,
       flashSeverity: null,
@@ -120,10 +155,10 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
 
     const runEvent = (i: number) => {
       if (stoppedRef.current) return;
-      if (i >= script.events.length) {
+      if (i >= activeScript.events.length) {
         const result: AuditRunResult = {
           id: `run-${startedAt}`,
-          target: script.target,
+          target: activeScript.target,
           startedAt,
           endedAt: Date.now(),
           findings,
@@ -143,7 +178,7 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
         return;
       }
 
-      const ev = script.events[i];
+      const ev = activeScript.events[i];
       const mood: NoraSnapshot["mood"] =
         ev.kind === "finding"
           ? moodForSeverity(ev.severity)
@@ -154,7 +189,7 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
       setState((s) => ({
         ...s,
         currentNodeId: nodeIdForEvent(ev) ?? s.currentNodeId,
-        progress: { index: i + 1, total: script.events.length },
+        progress: { index: i + 1, total: activeScript.events.length },
         snapshot: {
           state: stateForEvent(ev),
           mood,
@@ -186,8 +221,10 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
       timerRef.current = setTimeout(() => runEvent(i + 1), ev.durationMs);
     };
 
-    runEvent(0);
-  }, [script]);
+      runEvent(0);
+    },
+    [script]
+  );
 
   const onFinding = useCallback((cb: (f: AuditFinding) => void) => {
     findingListeners.current.add(cb);
@@ -203,5 +240,5 @@ export function useAuditRun(script: AuditScript): UseAuditRun {
     };
   }, []);
 
-  return { ...state, start, stop, onFinding, onComplete };
+  return { ...state, start, stop, prepare, fail, onFinding, onComplete };
 }

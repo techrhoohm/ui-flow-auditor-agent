@@ -11,7 +11,8 @@ import { FlowCanvas } from "@/components/flow/FlowCanvas";
 import { PointingLine } from "@/components/flow/PointingLine";
 import { Nora } from "@/components/nora/Nora";
 import { Sidebar } from "@/components/shell/Sidebar";
-import { Topbar } from "@/components/shell/Topbar";
+import { Topbar, type AuditTarget } from "@/components/shell/Topbar";
+import type { AuditScript } from "@/lib/audit-script";
 import { vitalsAppScript } from "@/lib/audit-script";
 import {
   useAuditRun,
@@ -41,6 +42,7 @@ function Dashboard() {
     Record<string, AuditFinding[]>
   >({});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [target, setTarget] = useState<AuditTarget>("demo");
 
   const noraAnchorRef = useRef<HTMLDivElement | null>(null);
   const [noraOrigin, setNoraOrigin] = useState<{ x: number; y: number } | null>(
@@ -108,7 +110,7 @@ function Dashboard() {
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  const handleStart = useCallback(() => {
+  const resetCanvas = useCallback(() => {
     setFindingsByNode({});
     setNodes((prev) =>
       prev.map((n) => ({
@@ -121,8 +123,30 @@ function Dashboard() {
         },
       }))
     );
-    run.start();
-  }, [run]);
+  }, []);
+
+  const handleStart = useCallback(async () => {
+    resetCanvas();
+
+    if (target === "demo") {
+      run.start();
+      return;
+    }
+
+    run.prepare("Reading VitalsApp source.");
+    try {
+      const res = await fetch("/api/audit/vitalsapp", { cache: "no-store" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      const { script } = (await res.json()) as { script: AuditScript };
+      run.start(script);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      run.fail(`Source unreachable. ${msg}`);
+    }
+  }, [resetCanvas, run, target]);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null),
@@ -131,7 +155,13 @@ function Dashboard() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
-      <Topbar running={run.running} onStart={handleStart} onStop={run.stop} />
+      <Topbar
+        running={run.running}
+        target={target}
+        onTargetChange={setTarget}
+        onStart={handleStart}
+        onStop={run.stop}
+      />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar

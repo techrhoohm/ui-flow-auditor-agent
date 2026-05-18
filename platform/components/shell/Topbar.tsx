@@ -1,12 +1,27 @@
 "use client";
 
+export type AuditTarget = "demo" | "vitalsapp";
+
 type Props = {
   running: boolean;
+  target: AuditTarget;
+  onTargetChange: (t: AuditTarget) => void;
   onStart: () => void;
   onStop: () => void;
 };
 
-export function Topbar({ running, onStart, onStop }: Props) {
+const TARGET_LABEL: Record<AuditTarget, string> = {
+  demo: "Demo (scripted)",
+  vitalsapp: "VitalsApp (live)",
+};
+
+export function Topbar({
+  running,
+  target,
+  onTargetChange,
+  onStart,
+  onStop,
+}: Props) {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950/70 px-4 backdrop-blur">
       <div className="flex items-center gap-3">
@@ -18,15 +33,34 @@ export function Topbar({ running, onStart, onStop }: Props) {
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 2 · Scripted playback
+            Milestone 4 · Live audit
           </span>
         </div>
       </div>
 
       <div className="flex items-center gap-3">
-        <span className="font-mono text-[11px] text-zinc-500">
-          target: <span className="text-zinc-300">VitalsApp</span>
-        </span>
+        <div className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
+          {(["demo", "vitalsapp"] as const).map((t) => {
+            const isActive = target === t;
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => onTargetChange(t)}
+                disabled={running}
+                className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                  isActive
+                    ? "bg-violet-500/15 text-violet-200"
+                    : "text-zinc-400 hover:text-zinc-200"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                title={running ? "Stop the current run to switch targets" : ""}
+              >
+                {TARGET_LABEL[t]}
+              </button>
+            );
+          })}
+        </div>
+
         {running ? (
           <button
             type="button"
