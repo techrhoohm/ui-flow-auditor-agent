@@ -102,9 +102,18 @@ export function DetailPanel({ nodeId, data, findings, onClose }: Props) {
 
           <div className="overflow-y-auto px-5 pb-6">
             <div className="mt-5 flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="h-[280px] w-[156px]">
-                <MockScreen screenId={nodeId} />
-              </div>
+              {data.screenshotUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={data.screenshotUrl}
+                  alt={data.label}
+                  className="max-h-[420px] w-full rounded-md object-contain"
+                />
+              ) : (
+                <div className="h-[280px] w-[156px]">
+                  <MockScreen screenId={nodeId} />
+                </div>
+              )}
             </div>
 
             <div className="mt-5 grid grid-cols-3 gap-2">

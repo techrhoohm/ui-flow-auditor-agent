@@ -3,6 +3,7 @@
 import {
   ReactFlowProvider,
   applyNodeChanges,
+  type Edge,
   type Node,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +28,19 @@ import {
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
+type UrlAuditResponse = {
+  script: AuditScript;
+  nodes: Array<{
+    id: string;
+    label: string;
+    kind: ScreenNodeData["kind"];
+    position: { x: number; y: number };
+    hasScreenshot: boolean;
+  }>;
+  edges: Array<{ source: string; target: string }>;
+  screenshots: Record<string, string>;
+};
+
 export default function Page() {
   return (
     <ReactFlowProvider>
@@ -37,12 +51,14 @@ export default function Page() {
 
 function Dashboard() {
   const [nodes, setNodes] = useState<Node<ScreenNodeData>[]>(vitalsAppNodes);
+  const [edges, setEdges] = useState<Edge[]>(vitalsAppEdges);
   const [history, setHistory] = useState<AuditRunResult[]>([]);
   const [findingsByNode, setFindingsByNode] = useState<
     Record<string, AuditFinding[]>
   >({});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [target, setTarget] = useState<AuditTarget>("demo");
+  const [urlInput, setUrlInput] = useState("");
 
   const noraAnchorRef = useRef<HTMLDivElement | null>(null);
   const [noraOrigin, setNoraOrigin] = useState<{ x: number; y: number } | null>(
@@ -110,6 +126,19 @@ function Dashboard() {
     return () => window.removeEventListener("resize", measure);
   }, []);
 
+  // Swap the canvas to the fixture set when target changes back to demo / vitalsapp.
+  useEffect(() => {
+    if (target === "demo" || target === "vitalsapp") {
+      setNodes(
+        vitalsAppNodes.map((n) => ({
+          ...n,
+          data: { ...n.data, issueCount: 0, screenshotUrl: null },
+        }))
+      );
+      setEdges(vitalsAppEdges);
+    }
+  }, [target]);
+
   const resetCanvas = useCallback(() => {
     setFindingsByNode({});
     setNodes((prev) =>
@@ -125,28 +154,81 @@ function Dashboard() {
     );
   }, []);
 
-  const handleStart = useCallback(async () => {
-    resetCanvas();
+  const swapToDynamic = useCallback((res: UrlAuditResponse) => {
+    const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
+      id: n.id,
+      type: "screen",
+      position: n.position,
+      data: {
+        label: n.label,
+        kind: n.kind,
+        issueCount: 0,
+        thumbnailSeed: n.id,
+        screenshotUrl: res.screenshots[n.id] ?? null,
+        isActive: false,
+        flashSeverity: null,
+      },
+    }));
+    const dynamicEdges: Edge[] = res.edges.map((e, i) => ({
+      id: `e-${i}-${e.source}-${e.target}`,
+      source: e.source,
+      target: e.target,
+    }));
+    setNodes(dynamicNodes);
+    setEdges(dynamicEdges);
+    setFindingsByNode({});
+  }, []);
 
+  const handleStart = useCallback(async () => {
     if (target === "demo") {
+      resetCanvas();
       run.start();
       return;
     }
 
-    run.prepare("Reading VitalsApp source.");
+    if (target === "vitalsapp") {
+      resetCanvas();
+      run.prepare("Reading VitalsApp source.");
+      try {
+        const res = await fetch("/api/audit/vitalsapp", { cache: "no-store" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body?.error ?? `HTTP ${res.status}`);
+        }
+        const { script } = (await res.json()) as { script: AuditScript };
+        run.start(script);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        run.fail(`Source unreachable. ${msg}`);
+      }
+      return;
+    }
+
+    // target === "url"
+    if (!urlInput) {
+      run.fail("No URL.");
+      return;
+    }
+    run.prepare(`Crawling ${truncate(urlInput, 40)}.`);
     try {
-      const res = await fetch("/api/audit/vitalsapp", { cache: "no-store" });
+      const res = await fetch("/api/audit/url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlInput, maxPages: 6 }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.error ?? `HTTP ${res.status}`);
       }
-      const { script } = (await res.json()) as { script: AuditScript };
-      run.start(script);
+      const data = (await res.json()) as UrlAuditResponse;
+      swapToDynamic(data);
+      // Small tick so React commits the new nodes before the script plays.
+      setTimeout(() => run.start(data.script), 50);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      run.fail(`Source unreachable. ${msg}`);
+      run.fail(`Crawl failed. ${msg}`);
     }
-  }, [resetCanvas, run, target]);
+  }, [resetCanvas, run, swapToDynamic, target, urlInput]);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null),
@@ -158,7 +240,9 @@ function Dashboard() {
       <Topbar
         running={run.running}
         target={target}
+        url={urlInput}
         onTargetChange={setTarget}
+        onUrlChange={setUrlInput}
         onStart={handleStart}
         onStop={run.stop}
       />
@@ -173,7 +257,7 @@ function Dashboard() {
         <main className="relative flex-1 overflow-hidden">
           <FlowCanvas
             nodes={nodes}
-            edges={vitalsAppEdges}
+            edges={edges}
             onNodesChange={onNodesChange}
             onNodeClick={(id) => setSelectedNodeId(id)}
           />
@@ -200,4 +284,8 @@ function Dashboard() {
       </div>
     </div>
   );
+}
+
+function truncate(s: string, n: number) {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }

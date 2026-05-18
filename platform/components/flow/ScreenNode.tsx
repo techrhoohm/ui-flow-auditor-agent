@@ -62,9 +62,19 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
         />
 
         <div className="relative mb-2 flex h-24 w-full items-center justify-center overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-950">
-          <div className="h-full w-[60%]">
-            <MockScreen screenId={id} />
-          </div>
+          {data.screenshotUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.screenshotUrl}
+              alt={data.label}
+              className="h-full w-full object-cover object-top"
+              draggable={false}
+            />
+          ) : (
+            <div className="h-full w-[60%]">
+              <MockScreen screenId={id} />
+            </div>
+          )}
           {flash && (
             <motion.div
               key={`${flash}-${data.issueCount}`}

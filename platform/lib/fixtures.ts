@@ -7,6 +7,7 @@ export type ScreenNodeData = {
   kind: "entry" | "tab" | "modal" | "detail";
   issueCount: number;
   thumbnailSeed: string;
+  screenshotUrl?: string | null;
   isActive?: boolean;
   flashSeverity?: Severity | null;
   [key: string]: unknown;
