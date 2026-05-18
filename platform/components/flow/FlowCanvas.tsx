@@ -1,0 +1,54 @@
+"use client";
+
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  ReactFlow,
+  type Edge,
+  type Node,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { useMemo } from "react";
+import { ScreenNode } from "./ScreenNode";
+
+type Props = {
+  nodes: Node[];
+  edges: Edge[];
+};
+
+export function FlowCanvas({ nodes, edges }: Props) {
+  const nodeTypes = useMemo(() => ({ screen: ScreenNode }), []);
+
+  return (
+    <div className="h-full w-full">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        proOptions={{ hideAttribution: true }}
+        colorMode="dark"
+        nodesDraggable
+        nodesConnectable={false}
+        edgesFocusable={false}
+        defaultEdgeOptions={{
+          style: { stroke: "#3f3f46", strokeWidth: 1.25 },
+        }}
+      >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={24}
+          size={1}
+          color="#27272a"
+        />
+        <Controls
+          position="bottom-right"
+          showInteractive={false}
+          className="!border-zinc-800 !bg-zinc-900/80"
+        />
+      </ReactFlow>
+    </div>
+  );
+}
