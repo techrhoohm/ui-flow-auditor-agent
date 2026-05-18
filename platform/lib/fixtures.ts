@@ -1,10 +1,14 @@
 import type { Edge, Node } from "@xyflow/react";
 
+import type { Severity } from "./audit-script";
+
 export type ScreenNodeData = {
   label: string;
   kind: "entry" | "tab" | "modal" | "detail";
   issueCount: number;
   thumbnailSeed: string;
+  isActive?: boolean;
+  flashSeverity?: Severity | null;
   [key: string]: unknown;
 };
 

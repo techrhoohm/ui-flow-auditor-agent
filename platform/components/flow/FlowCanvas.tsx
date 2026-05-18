@@ -7,6 +7,8 @@ import {
   ReactFlow,
   type Edge,
   type Node,
+  type OnEdgesChange,
+  type OnNodesChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMemo } from "react";
@@ -15,9 +17,11 @@ import { ScreenNode } from "./ScreenNode";
 type Props = {
   nodes: Node[];
   edges: Edge[];
+  onNodesChange?: OnNodesChange;
+  onEdgesChange?: OnEdgesChange;
 };
 
-export function FlowCanvas({ nodes, edges }: Props) {
+export function FlowCanvas({ nodes, edges, onNodesChange, onEdgesChange }: Props) {
   const nodeTypes = useMemo(() => ({ screen: ScreenNode }), []);
 
   return (
@@ -25,6 +29,8 @@ export function FlowCanvas({ nodes, edges }: Props) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}

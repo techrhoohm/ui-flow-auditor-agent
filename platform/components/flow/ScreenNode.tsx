@@ -1,6 +1,8 @@
 "use client";
 
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { motion } from "framer-motion";
+import type { Severity } from "@/lib/audit-script";
 import type { ScreenNodeData } from "@/lib/fixtures";
 
 type ScreenNodeType = Node<ScreenNodeData, "screen">;
@@ -20,44 +22,81 @@ const kindLabel: Record<ScreenNodeData["kind"], string> = {
   detail: "Detail",
 };
 
-export function ScreenNode({ data }: NodeProps<ScreenNodeType>) {
-  return (
-    <div
-      className={`w-[148px] rounded-lg border ${kindStyles[data.kind]} px-3 py-3 shadow-md transition-colors hover:border-zinc-500`}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!h-1.5 !w-1.5 !border-0 !bg-zinc-500"
-      />
+const severityRing: Record<Severity, string> = {
+  low: "ring-sky-400/60",
+  medium: "ring-amber-400/70",
+  high: "ring-rose-400/80",
+};
 
-      <div className="mb-2 h-16 w-full overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-950">
-        <div
-          className="h-full w-full"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle at 30% 30%, rgba(167,139,250,0.18), transparent 60%), repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 6px)",
-          }}
+const severityFlashBg: Record<Severity, string> = {
+  low: "bg-sky-500/20",
+  medium: "bg-amber-500/25",
+  high: "bg-rose-500/30",
+};
+
+export function ScreenNode({ data }: NodeProps<ScreenNodeType>) {
+  const active = !!data.isActive;
+  const flash = data.flashSeverity ?? null;
+
+  return (
+    <div className="relative">
+      {active && (
+        <motion.span
+          aria-hidden
+          className="pointer-events-none absolute -inset-1 rounded-xl border border-violet-300/70"
+          animate={{ opacity: [0.4, 1, 0.4], scale: [1, 1.02, 1] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+        />
+      )}
+
+      <div
+        className={`relative w-[148px] rounded-lg border ${kindStyles[data.kind]} px-3 py-3 shadow-md transition-colors ${
+          active ? "border-violet-300/80" : "hover:border-zinc-500"
+        }`}
+      >
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!h-1.5 !w-1.5 !border-0 !bg-zinc-500"
+        />
+
+        <div className="relative mb-2 h-16 w-full overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-950">
+          <div
+            className="h-full w-full"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 30% 30%, rgba(167,139,250,0.18), transparent 60%), repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 6px)",
+            }}
+          />
+          {flash && (
+            <motion.div
+              key={`${flash}-${data.issueCount}`}
+              initial={{ opacity: 0.9 }}
+              animate={{ opacity: 0 }}
+              transition={{ duration: 0.7, ease: "easeOut" }}
+              className={`pointer-events-none absolute inset-0 ${severityFlashBg[flash]} ring-1 ${severityRing[flash]}`}
+            />
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+              {kindLabel[data.kind]}
+            </div>
+            <div className="truncate text-[13px] font-medium text-zinc-100">
+              {data.label}
+            </div>
+          </div>
+          <IssueBadge count={data.issueCount} />
+        </div>
+
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!h-1.5 !w-1.5 !border-0 !bg-zinc-500"
         />
       </div>
-
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-            {kindLabel[data.kind]}
-          </div>
-          <div className="truncate text-[13px] font-medium text-zinc-100">
-            {data.label}
-          </div>
-        </div>
-        <IssueBadge count={data.issueCount} />
-      </div>
-
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!h-1.5 !w-1.5 !border-0 !bg-zinc-500"
-      />
     </div>
   );
 }
@@ -71,8 +110,14 @@ function IssueBadge({ count }: { count: number }) {
     );
   }
   return (
-    <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-mono text-rose-300">
+    <motion.span
+      key={count}
+      initial={{ scale: 1.4 }}
+      animate={{ scale: 1 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+      className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-mono text-rose-300"
+    >
       {count}
-    </span>
+    </motion.span>
   );
 }
