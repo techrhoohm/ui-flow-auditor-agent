@@ -37,8 +37,23 @@ const DEFAULT_OPTIONS: Required<CrawlOptions> = {
   maxPages: 8,
   perPageTimeoutMs: 18000,
   totalTimeoutMs: 90000,
-  viewport: { width: 412, height: 824 },
+  viewport: { width: 1280, height: 800 },
 };
+
+const REALISTIC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+const BLOCK_PATTERNS: RegExp[] = [
+  /unusual traffic/i,
+  /are you a human/i,
+  /access denied/i,
+  /request (?:has been )?blocked/i,
+  /verify you are human/i,
+  /captcha/i,
+  /cloudflare/i,
+  /just a moment/i,
+  /enable javascript and cookies to continue/i,
+];
 
 const impactToSeverity = (impact: string | null): CrawlFinding["severity"] => {
   if (impact === "critical" || impact === "serious") return "high";
@@ -53,9 +68,14 @@ const titleCaseRule = (id: string) =>
     .join(" ");
 
 export function validateUrl(input: string): URL {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error("Empty URL.");
+  const withScheme = /^[a-z]+:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
   let parsed: URL;
   try {
-    parsed = new URL(input);
+    parsed = new URL(withScheme);
   } catch {
     throw new Error("Not a valid URL.");
   }
@@ -80,11 +100,25 @@ export async function crawlSite(
   const edges: { source: string; target: string }[] = [];
 
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+      ],
+    });
     const context = await browser.newContext({
       viewport: opts.viewport,
-      userAgent:
-        "Mozilla/5.0 (UI Flow Auditor / Nora) PlaywrightChromium/1.0",
+      userAgent: REALISTIC_UA,
+      locale: "en-US",
+      timezoneId: "America/Los_Angeles",
+      extraHTTPHeaders: {
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
 
     const visited = new Map<string, string>(); // canonical URL -> nodeId
@@ -211,6 +245,28 @@ async function visit(
     screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
   } catch {
     screenshot = null;
+  }
+
+  const bodyText = await page
+    .evaluate(() => document.body?.innerText?.slice(0, 4000) ?? "")
+    .catch(() => "");
+  const combined = `${title}\n${bodyText}`;
+  const blockedMatch = BLOCK_PATTERNS.find((re) => re.test(combined));
+  if (blockedMatch) {
+    return {
+      finalUrl,
+      title,
+      screenshot,
+      sameOriginLinks: [],
+      findings: [
+        {
+          rule: "automation-blocked",
+          severity: "high",
+          message: `Site detected the headless browser and served a block / captcha page (matched "${blockedMatch.source}"). Audit results are not reliable until the request is allowed.`,
+          line: 1,
+        },
+      ],
+    };
   }
 
   const sameOriginLinks = await page.evaluate((rootOrigin) => {
