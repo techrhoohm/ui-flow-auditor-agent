@@ -54,6 +54,7 @@ type UrlAuditResponse = {
     position: { x: number; y: number };
     hasScreenshot: boolean;
     url: string;
+    deviceType?: "mobile" | "desktop";
   }>;
   edges: Array<{ source: string; target: string }>;
   screenshots: Record<string, string>;
@@ -204,6 +205,7 @@ function Dashboard() {
         thumbnailSeed: n.id,
         screenshotUrl: res.screenshots[n.id] ?? null,
         nodeUrl: n.url,
+        deviceType: n.deviceType,
         isActive: false,
         flashSeverity: null,
       },
@@ -254,20 +256,24 @@ function Dashboard() {
       return;
     }
 
-    // Source path — call stub
-    run.prepare(`Reading source at ${truncate(trimmed, 40)}.`);
+    // Source path / .app bundle
+    run.prepare(`Reading ${truncate(trimmed, 40)}.`);
     try {
       const res = await fetch("/api/audit/source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: trimmed }),
       });
-      const body = await res.json().catch(() => ({}));
-      const errMsg = (body as { error?: string })?.error ?? `HTTP ${res.status}`;
-      run.fail(errMsg);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string })?.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as UrlAuditResponse;
+      swapToDynamic(data);
+      setTimeout(() => run.start(data.script), 50);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      run.fail(`Source audit failed. ${msg}`);
+      run.fail(msg);
     }
   }, [run, runDiffs, swapToDynamic, targetInput]);
 

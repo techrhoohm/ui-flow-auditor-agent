@@ -70,6 +70,8 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
               className="h-full w-full object-cover object-top"
               draggable={false}
             />
+          ) : data.deviceType === "desktop" ? (
+            <DesktopMock />
           ) : (
             <div className="h-full w-[60%]">
               <MockScreen screenId={id} />
@@ -172,6 +174,34 @@ function ScriptBadge({
     >
       S {summary.pass}/{summary.total}
     </span>
+  );
+}
+
+function DesktopMock() {
+  return (
+    <div className="flex h-full w-full items-center justify-center">
+      <svg
+        viewBox="0 0 80 60"
+        className="h-14 w-auto"
+        fill="none"
+        aria-hidden
+      >
+        {/* Monitor bezel */}
+        <rect x="2" y="2" width="76" height="46" rx="3" fill="#0f0f17" stroke="#2a2a36" strokeWidth="1.2" />
+        {/* Screen area */}
+        <rect x="5" y="5" width="70" height="40" rx="1.5" fill="#06060c" />
+        {/* Decorative UI lines */}
+        <rect x="9" y="10" width="30" height="18" rx="1" fill="#1a1a26" />
+        <line x1="44" y1="11" x2="68" y2="11" stroke="#2a2a38" strokeWidth="1.2" />
+        <line x1="44" y1="15" x2="62" y2="15" stroke="#2a2a38" strokeWidth="1.2" />
+        <line x1="44" y1="19" x2="65" y2="19" stroke="#2a2a38" strokeWidth="1.2" />
+        <line x1="9" y1="33" x2="68" y2="33" stroke="#1e1e2c" strokeWidth="1" />
+        <line x1="9" y1="38" x2="48" y2="38" stroke="#1e1e2c" strokeWidth="1" />
+        {/* Stand */}
+        <line x1="40" y1="48" x2="40" y2="54" stroke="#2a2a36" strokeWidth="1.5" />
+        <line x1="30" y1="54" x2="50" y2="54" stroke="#2a2a36" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    </div>
   );
 }
 

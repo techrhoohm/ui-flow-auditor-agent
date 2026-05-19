@@ -9,6 +9,7 @@ export type ScreenNodeData = {
   thumbnailSeed: string;
   screenshotUrl?: string | null;
   nodeUrl?: string | null;
+  deviceType?: "mobile" | "desktop";
   testCaseCount?: number;
   scriptSummary?: {
     pass: number;

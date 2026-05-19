@@ -1,5 +1,5 @@
 export type Platform = {
-  kind: "web" | "ios" | "android" | "reactnative" | "flutter" | "source";
+  kind: "web" | "ios" | "android" | "reactnative" | "flutter" | "macos" | "source";
   label: string;
   color: string;
 };
@@ -9,6 +9,10 @@ export function detectPlatform(input: string): Platform {
 
   if (/^https?:\/\//i.test(s)) {
     return { kind: "web", label: "Web", color: "violet" };
+  }
+
+  if (/\.app\/?$/i.test(s)) {
+    return { kind: "macos", label: "macOS", color: "sky" };
   }
 
   if (/\.swift/i.test(s) || /\.(xcodeproj|xcworkspace|ipa)$/i.test(s)) {
