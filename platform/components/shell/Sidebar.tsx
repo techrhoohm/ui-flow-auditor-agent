@@ -47,7 +47,7 @@ export function Sidebar({
 
   const [baselineMeta, setBaselineMeta] = useState<BaselineMeta>({ count: 0, savedAt: null });
   useEffect(() => {
-    const refresh = () => setBaselineMeta(getBaselineMeta(targetKey));
+    const refresh = () => { void getBaselineMeta(targetKey).then(setBaselineMeta); };
     refresh();
     window.addEventListener(BASELINES_EVENT, refresh);
     window.addEventListener("storage", refresh);

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { dbGet, dbSet, dbGetAll, dbDeleteByPrefix } from "./db";
 
-const STORAGE_KEY = "uifa:regressions:v1";
+const STORE = "regressions" as const;
 const EVENT = "uifa:regressions:changed";
 
 export type RegressionResult = {
@@ -14,85 +15,52 @@ export type RegressionResult = {
   checkedAt: number;
 };
 
-type Store = Record<string, RegressionResult>; // `${targetKey}::${nodeId}`
-
 const isBrowser = () => typeof window !== "undefined";
-
-function read(): Store {
-  if (!isBrowser()) return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Store) : {};
-  } catch {
-    return {};
-  }
-}
-
-function write(store: Store) {
-  if (!isBrowser()) return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {}
-}
+const compKey = (targetKey: string, nodeId: string) => `${targetKey}::${nodeId}`;
 
 function emit() {
-  if (!isBrowser()) return;
-  window.dispatchEvent(new CustomEvent(EVENT));
+  if (isBrowser()) window.dispatchEvent(new CustomEvent(EVENT));
 }
 
-const compositeKey = (targetKey: string, nodeId: string) =>
-  `${targetKey}::${nodeId}`;
-
-export function saveRegression(
+export async function saveRegression(
   targetKey: string,
   nodeId: string,
   result: RegressionResult
-) {
-  const store = read();
-  store[compositeKey(targetKey, nodeId)] = result;
-  write(store);
+): Promise<void> {
+  await dbSet(STORE, compKey(targetKey, nodeId), result);
   emit();
 }
 
-export function getRegression(
+export async function getRegression(
   targetKey: string,
   nodeId: string
-): RegressionResult | null {
-  return read()[compositeKey(targetKey, nodeId)] ?? null;
+): Promise<RegressionResult | null> {
+  return (await dbGet<RegressionResult>(STORE, compKey(targetKey, nodeId))) ?? null;
 }
 
-export function clearRegressions(targetKey: string) {
-  const store = read();
-  const prefix = `${targetKey}::`;
-  for (const k of Object.keys(store)) {
-    if (k.startsWith(prefix)) delete store[k];
-  }
-  write(store);
+export async function clearRegressions(targetKey: string): Promise<void> {
+  await dbDeleteByPrefix(STORE, `${targetKey}::`);
   emit();
 }
 
-export function getAllRegressions(
+export async function getAllRegressions(
   targetKey: string
-): Record<string, RegressionResult> {
-  const store = read();
+): Promise<Record<string, RegressionResult>> {
   const prefix = `${targetKey}::`;
+  const items = await dbGetAll<RegressionResult>(STORE, prefix);
   const out: Record<string, RegressionResult> = {};
-  for (const [k, v] of Object.entries(store)) {
-    if (!k.startsWith(prefix)) continue;
-    const nodeId = k.slice(prefix.length);
-    out[nodeId] = v;
+  for (const { key, value } of items) {
+    out[key.slice(prefix.length)] = value;
   }
   return out;
 }
 
 export function useRegressions(targetKey: string | null) {
-  const [regressions, setRegressions] = useState<
-    Record<string, RegressionResult>
-  >({});
+  const [regressions, setRegressions] = useState<Record<string, RegressionResult>>({});
 
   const refresh = useCallback(() => {
     if (!targetKey) { setRegressions({}); return; }
-    setRegressions(getAllRegressions(targetKey));
+    void getAllRegressions(targetKey).then(setRegressions);
   }, [targetKey]);
 
   useEffect(() => {

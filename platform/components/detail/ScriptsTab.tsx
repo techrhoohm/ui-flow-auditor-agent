@@ -65,7 +65,7 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
       });
       const data = await res.json() as { name?: string; body?: string; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
-      importScript(targetKey, nodeId, data.name ?? noraDescription, data.body ?? "");
+      void importScript(targetKey, nodeId, data.name ?? noraDescription, data.body ?? "");
       setNoraDescription("");
       setShowNoraInput(false);
     } catch (err) {
@@ -84,7 +84,7 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
       const text = ev.target?.result as string;
       try {
         const parsed = parseScriptFile(file.name, text);
-        importScript(targetKey, nodeId, parsed.name, parsed.body);
+        void importScript(targetKey, nodeId, parsed.name, parsed.body);
         setImportMsg({ text: `Imported "${parsed.name}"`, ok: true });
       } catch (err) {
         setImportMsg({ text: err instanceof Error ? err.message : "Import failed", ok: false });
@@ -106,14 +106,14 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
 
   const save = () => {
     if (!draft || !draft.name.trim() || !draft.body.trim()) return;
-    upsertScript(targetKey, nodeId, draft);
+    void upsertScript(targetKey, nodeId, draft);
     setDraft(null);
     setEditingId(null);
   };
 
   const remove = (id: string) => {
     if (!confirm("Delete this script and its last result?")) return;
-    deleteScript(targetKey, nodeId, id);
+    void deleteScript(targetKey, nodeId, id);
     if (editingId === id) {
       setDraft(null);
       setEditingId(null);
@@ -135,7 +135,7 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
       });
       const data = (await res.json()) as ScriptResult & { error?: string };
       if (!res.ok) {
-        saveResult(targetKey, nodeId, script.id, {
+        void saveResult(targetKey, nodeId, script.id, {
           status: "error",
           durationMs: data.durationMs ?? 0,
           logs: data.logs ?? [],
@@ -143,13 +143,13 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
           ranAt: Date.now(),
         });
       } else {
-        saveResult(targetKey, nodeId, script.id, {
+        void saveResult(targetKey, nodeId, script.id, {
           ...data,
           ranAt: Date.now(),
         });
       }
     } catch (err) {
-      saveResult(targetKey, nodeId, script.id, {
+      void saveResult(targetKey, nodeId, script.id, {
         status: "error",
         durationMs: 0,
         logs: [],

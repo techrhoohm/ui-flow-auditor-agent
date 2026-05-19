@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { dbGet, dbSet, dbDelete, dbGetAll } from "./db";
 
 export type Priority = "P0" | "P1" | "P2";
 export type TestType = "functional" | "visual" | "a11y" | "perf";
@@ -15,76 +16,38 @@ export type TestCase = {
   updatedAt: number;
 };
 
-const STORAGE_KEY = "uifa:test-cases:v1";
-
-type Store = Record<string, TestCase[]>; // key = `${targetKey}::${nodeId}`
-
-const isBrowser = () => typeof window !== "undefined";
-
-function readStore(): Store {
-  if (!isBrowser()) return {};
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Store;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeStore(store: Store) {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // quota / serialization — swallow
-  }
-}
-
-const compositeKey = (targetKey: string, nodeId: string) =>
-  `${targetKey}::${nodeId}`;
-
-const newId = () =>
-  `tc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-
+const STORE = "test-cases" as const;
 const EVENT = "uifa:test-cases:changed";
 
-function emitChange() {
-  if (!isBrowser()) return;
-  window.dispatchEvent(new CustomEvent(EVENT));
+const isBrowser = () => typeof window !== "undefined";
+const compKey = (targetKey: string, nodeId: string) => `${targetKey}::${nodeId}`;
+const newId = () => `tc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+function emit() {
+  if (isBrowser()) window.dispatchEvent(new CustomEvent(EVENT));
 }
 
-export function getTestCases(
-  targetKey: string,
-  nodeId: string
-): TestCase[] {
-  const store = readStore();
-  return store[compositeKey(targetKey, nodeId)] ?? [];
+export async function getTestCases(targetKey: string, nodeId: string): Promise<TestCase[]> {
+  return (await dbGet<TestCase[]>(STORE, compKey(targetKey, nodeId))) ?? [];
 }
 
-export function getTestCaseCounts(targetKey: string): Record<string, number> {
-  const store = readStore();
+export async function getTestCaseCounts(targetKey: string): Promise<Record<string, number>> {
   const prefix = `${targetKey}::`;
+  const items = await dbGetAll<TestCase[]>(STORE, prefix);
   const out: Record<string, number> = {};
-  for (const k of Object.keys(store)) {
-    if (!k.startsWith(prefix)) continue;
-    const nodeId = k.slice(prefix.length);
-    out[nodeId] = store[k]?.length ?? 0;
+  for (const { key, value } of items) {
+    out[key.slice(prefix.length)] = value.length;
   }
   return out;
 }
 
-export function upsertTestCase(
+export async function upsertTestCase(
   targetKey: string,
   nodeId: string,
-  input: Omit<TestCase, "createdAt" | "updatedAt"> & {
-    createdAt?: number;
-  }
-): TestCase {
-  const store = readStore();
-  const key = compositeKey(targetKey, nodeId);
-  const list = store[key] ?? [];
+  input: Omit<TestCase, "createdAt" | "updatedAt"> & { createdAt?: number }
+): Promise<TestCase> {
+  const key = compKey(targetKey, nodeId);
+  const list = (await dbGet<TestCase[]>(STORE, key)) ?? [];
   const now = Date.now();
   const existing = list.find((t) => t.id === input.id);
   const tc: TestCase = {
@@ -96,39 +59,32 @@ export function upsertTestCase(
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now,
   };
-  const nextList = existing
-    ? list.map((t) => (t.id === tc.id ? tc : t))
-    : [...list, tc];
-  store[key] = nextList;
-  writeStore(store);
-  emitChange();
+  const nextList = existing ? list.map((t) => (t.id === tc.id ? tc : t)) : [...list, tc];
+  await dbSet(STORE, key, nextList);
+  emit();
   return tc;
 }
 
-export function deleteTestCase(
-  targetKey: string,
-  nodeId: string,
-  id: string
-) {
-  const store = readStore();
-  const key = compositeKey(targetKey, nodeId);
-  const list = store[key] ?? [];
-  store[key] = list.filter((t) => t.id !== id);
-  if (store[key].length === 0) delete store[key];
-  writeStore(store);
-  emitChange();
+export async function deleteTestCase(targetKey: string, nodeId: string, id: string): Promise<void> {
+  const key = compKey(targetKey, nodeId);
+  const list = ((await dbGet<TestCase[]>(STORE, key)) ?? []).filter((t) => t.id !== id);
+  if (list.length === 0) {
+    await dbDelete(STORE, key);
+  } else {
+    await dbSet(STORE, key, list);
+  }
+  emit();
 }
 
-export function importTestCases(
+export async function importTestCases(
   targetKey: string,
   nodeId: string,
   items: Array<{ title: string; body?: string; priority?: Priority; type?: TestType }>
-): number {
+): Promise<number> {
   const VALID_P = new Set<Priority>(["P0", "P1", "P2"]);
   const VALID_T = new Set<TestType>(["functional", "visual", "a11y", "perf"]);
-  const store = readStore();
-  const key = compositeKey(targetKey, nodeId);
-  const list = store[key] ?? [];
+  const key = compKey(targetKey, nodeId);
+  const list = (await dbGet<TestCase[]>(STORE, key)) ?? [];
   const now = Date.now();
   let added = 0;
   for (const item of items) {
@@ -146,43 +102,32 @@ export function importTestCases(
     added++;
   }
   if (added > 0) {
-    store[key] = list;
-    writeStore(store);
-    emitChange();
+    await dbSet(STORE, key, list);
+    emit();
   }
   return added;
 }
 
 export function createDraft(): Omit<TestCase, "createdAt" | "updatedAt"> {
-  return {
-    id: newId(),
-    title: "",
-    body: "",
-    priority: "P1",
-    type: "functional",
-  };
+  return { id: newId(), title: "", body: "", priority: "P1", type: "functional" };
 }
 
 export function useTestCases(targetKey: string | null, nodeId: string | null) {
   const [cases, setCases] = useState<TestCase[]>([]);
 
   const refresh = useCallback(() => {
-    if (!targetKey || !nodeId) {
-      setCases([]);
-      return;
-    }
-    setCases(getTestCases(targetKey, nodeId));
+    if (!targetKey || !nodeId) { setCases([]); return; }
+    void getTestCases(targetKey, nodeId).then(setCases);
   }, [targetKey, nodeId]);
 
   useEffect(() => {
     refresh();
     if (!isBrowser()) return;
-    const onChange = () => refresh();
-    window.addEventListener(EVENT, onChange);
-    window.addEventListener("storage", onChange);
+    window.addEventListener(EVENT, refresh);
+    window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(EVENT, onChange);
-      window.removeEventListener("storage", onChange);
+      window.removeEventListener(EVENT, refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
 
@@ -193,22 +138,18 @@ export function useTestCaseCounts(targetKey: string | null) {
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const refresh = useCallback(() => {
-    if (!targetKey) {
-      setCounts({});
-      return;
-    }
-    setCounts(getTestCaseCounts(targetKey));
+    if (!targetKey) { setCounts({}); return; }
+    void getTestCaseCounts(targetKey).then(setCounts);
   }, [targetKey]);
 
   useEffect(() => {
     refresh();
     if (!isBrowser()) return;
-    const onChange = () => refresh();
-    window.addEventListener(EVENT, onChange);
-    window.addEventListener("storage", onChange);
+    window.addEventListener(EVENT, refresh);
+    window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(EVENT, onChange);
-      window.removeEventListener("storage", onChange);
+      window.removeEventListener(EVENT, refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
 

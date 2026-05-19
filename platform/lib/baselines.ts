@@ -1,74 +1,42 @@
 "use client";
 
-const STORAGE_KEY = "uifa:baselines:v1";
+import { dbGet, dbSet, dbGetAll, dbDeleteByPrefix } from "./db";
+
+const STORE = "baselines" as const;
 const EVENT = "uifa:baselines:changed";
 
+export type BaselineMeta = { count: number; savedAt: number | null };
 type BaselineEntry = { dataUrl: string; savedAt: number };
-type Store = Record<string, BaselineEntry>; // `${targetKey}::${nodeId}`
 
 const isBrowser = () => typeof window !== "undefined";
-
-function read(): Store {
-  if (!isBrowser()) return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Store) : {};
-  } catch {
-    return {};
-  }
-}
-
-function write(store: Store) {
-  if (!isBrowser()) return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {}
-}
+const compKey = (targetKey: string, nodeId: string) => `${targetKey}::${nodeId}`;
 
 function emit() {
-  if (!isBrowser()) return;
-  window.dispatchEvent(new CustomEvent(EVENT));
+  if (isBrowser()) window.dispatchEvent(new CustomEvent(EVENT));
 }
 
-const key = (targetKey: string, nodeId: string) => `${targetKey}::${nodeId}`;
-
-export function saveBaseline(targetKey: string, nodeId: string, dataUrl: string) {
-  const store = read();
-  store[key(targetKey, nodeId)] = { dataUrl, savedAt: Date.now() };
-  write(store);
+export async function saveBaseline(targetKey: string, nodeId: string, dataUrl: string): Promise<void> {
+  await dbSet(STORE, compKey(targetKey, nodeId), { dataUrl, savedAt: Date.now() } satisfies BaselineEntry);
   emit();
 }
 
-export function getBaseline(
-  targetKey: string,
-  nodeId: string
-): BaselineEntry | null {
-  return read()[key(targetKey, nodeId)] ?? null;
+export async function getBaseline(targetKey: string, nodeId: string): Promise<BaselineEntry | null> {
+  return (await dbGet<BaselineEntry>(STORE, compKey(targetKey, nodeId))) ?? null;
 }
 
-export function clearBaselines(targetKey: string) {
-  const store = read();
-  const prefix = `${targetKey}::`;
-  for (const k of Object.keys(store)) {
-    if (k.startsWith(prefix)) delete store[k];
-  }
-  write(store);
+export async function clearBaselines(targetKey: string): Promise<void> {
+  await dbDeleteByPrefix(STORE, `${targetKey}::`);
   emit();
 }
 
-export type BaselineMeta = { count: number; savedAt: number | null };
-
-export function getBaselineMeta(targetKey: string): BaselineMeta {
-  const store = read();
+export async function getBaselineMeta(targetKey: string): Promise<BaselineMeta> {
   const prefix = `${targetKey}::`;
-  let count = 0;
+  const items = await dbGetAll<BaselineEntry>(STORE, prefix);
   let savedAt: number | null = null;
-  for (const [k, v] of Object.entries(store)) {
-    if (!k.startsWith(prefix)) continue;
-    count++;
-    if (!savedAt || v.savedAt > savedAt) savedAt = v.savedAt;
+  for (const { value } of items) {
+    if (!savedAt || value.savedAt > savedAt) savedAt = value.savedAt;
   }
-  return { count, savedAt };
+  return { count: items.length, savedAt };
 }
 
 export const BASELINES_EVENT = EVENT;

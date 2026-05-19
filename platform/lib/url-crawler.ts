@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { type Browser, type BrowserContext, type Page } from "playwright";
+import { launchBrowser } from "./browser";
 
 export type CrawlPage = {
   id: string;
@@ -100,14 +101,7 @@ export async function crawlSite(
   const edges: { source: string; target: string }[] = [];
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    });
+    browser = await launchBrowser();
     const context = await browser.newContext({
       viewport: opts.viewport,
       userAgent: REALISTIC_UA,

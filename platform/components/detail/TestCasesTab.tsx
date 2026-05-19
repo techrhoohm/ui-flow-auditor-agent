@@ -96,14 +96,14 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
   const acceptSuggestion = (i: number) => {
     const s = suggestions[i];
     if (!s) return;
-    importTestCases(targetKey, nodeId, [s]);
+    void importTestCases(targetKey, nodeId, [s]);
     setAccepted((prev) => new Set([...prev, i]));
   };
 
   const acceptAll = () => {
     const remaining = suggestions.filter((_, i) => !accepted.has(i));
     if (remaining.length > 0) {
-      importTestCases(targetKey, nodeId, remaining);
+      void importTestCases(targetKey, nodeId, remaining);
       setAccepted(new Set(suggestions.map((_, i) => i)));
     }
   };
@@ -113,7 +113,7 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
     if (!file) return;
     e.target.value = "";
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       const text = ev.target?.result as string;
       try {
         let parsed;
@@ -121,7 +121,7 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
         else if (file.name.endsWith(".csv")) parsed = parseCsvTestCases(text);
         else if (file.name.endsWith(".md") || file.name.endsWith(".markdown")) parsed = parseMdTestCases(text);
         else throw new Error("Unsupported format. Use .json, .csv, or .md");
-        const count = importTestCases(targetKey, nodeId, parsed);
+        const count = await importTestCases(targetKey, nodeId, parsed);
         setImportMsg({ text: `Imported ${count} case${count === 1 ? "" : "s"}`, ok: true });
       } catch (err) {
         setImportMsg({ text: err instanceof Error ? err.message : "Import failed", ok: false });
@@ -149,14 +149,14 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
 
   const save = () => {
     if (!draft || !draft.title.trim()) return;
-    upsertTestCase(targetKey, nodeId, draft);
+    void upsertTestCase(targetKey, nodeId, draft);
     setDraft(null);
     setEditingId(null);
   };
 
   const remove = (id: string) => {
     if (!confirm("Delete this test case?")) return;
-    deleteTestCase(targetKey, nodeId, id);
+    void deleteTestCase(targetKey, nodeId, id);
     if (editingId === id) {
       setDraft(null);
       setEditingId(null);

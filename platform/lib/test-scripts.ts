@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { dbGet, dbSet, dbDelete, dbGetAll } from "./db";
 
 export type TestScript = {
   id: string;
@@ -20,109 +21,67 @@ export type ScriptResult = {
   ranAt: number;
 };
 
-const SCRIPTS_KEY = "uifa:test-scripts:v1";
-const RESULTS_KEY = "uifa:test-scripts:results:v1";
-
-type ScriptStore = Record<string, TestScript[]>;
-type ResultStore = Record<string, Record<string, ScriptResult>>; // composite -> scriptId -> result
-
-const isBrowser = () => typeof window !== "undefined";
-
-function readStore<T>(key: string): T {
-  if (!isBrowser()) return {} as T;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return {} as T;
-    const parsed = JSON.parse(raw) as T;
-    return parsed && typeof parsed === "object" ? parsed : ({} as T);
-  } catch {
-    return {} as T;
-  }
-}
-
-function writeStore<T>(key: string, store: T) {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(store));
-  } catch {
-    // ignore
-  }
-}
-
-const compositeKey = (targetKey: string, nodeId: string) =>
-  `${targetKey}::${nodeId}`;
-
-const newId = () =>
-  `ts_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-
+const SCRIPTS_STORE = "test-scripts" as const;
+const RESULTS_STORE = "test-script-results" as const;
 const EVENT = "uifa:test-scripts:changed";
 
+const isBrowser = () => typeof window !== "undefined";
+const compKey = (targetKey: string, nodeId: string) => `${targetKey}::${nodeId}`;
+const newId = () => `ts_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
 function emit() {
-  if (!isBrowser()) return;
-  window.dispatchEvent(new CustomEvent(EVENT));
+  if (isBrowser()) window.dispatchEvent(new CustomEvent(EVENT));
 }
 
-export function getScripts(targetKey: string, nodeId: string): TestScript[] {
-  const store = readStore<ScriptStore>(SCRIPTS_KEY);
-  return store[compositeKey(targetKey, nodeId)] ?? [];
+export async function getScripts(targetKey: string, nodeId: string): Promise<TestScript[]> {
+  return (await dbGet<TestScript[]>(SCRIPTS_STORE, compKey(targetKey, nodeId))) ?? [];
 }
 
-export function getScriptCounts(
-  targetKey: string
-): Record<string, number> {
-  const store = readStore<ScriptStore>(SCRIPTS_KEY);
+export async function getScriptCounts(targetKey: string): Promise<Record<string, number>> {
   const prefix = `${targetKey}::`;
+  const items = await dbGetAll<TestScript[]>(SCRIPTS_STORE, prefix);
   const out: Record<string, number> = {};
-  for (const k of Object.keys(store)) {
-    if (!k.startsWith(prefix)) continue;
-    const nodeId = k.slice(prefix.length);
-    out[nodeId] = store[k]?.length ?? 0;
-  }
+  for (const { key, value } of items) out[key.slice(prefix.length)] = value.length;
   return out;
 }
 
-export function getResults(
+export async function getResults(
   targetKey: string,
   nodeId: string
-): Record<string, ScriptResult> {
-  const store = readStore<ResultStore>(RESULTS_KEY);
-  return store[compositeKey(targetKey, nodeId)] ?? {};
+): Promise<Record<string, ScriptResult>> {
+  return (await dbGet<Record<string, ScriptResult>>(RESULTS_STORE, compKey(targetKey, nodeId))) ?? {};
 }
 
-export function getResultSummary(
+export async function getResultSummary(
   targetKey: string
-): Record<string, { pass: number; fail: number; error: number; total: number }> {
-  const scriptsStore = readStore<ScriptStore>(SCRIPTS_KEY);
-  const resultsStore = readStore<ResultStore>(RESULTS_KEY);
-  const out: Record<
-    string,
-    { pass: number; fail: number; error: number; total: number }
-  > = {};
+): Promise<Record<string, { pass: number; fail: number; error: number; total: number }>> {
   const prefix = `${targetKey}::`;
-  for (const k of Object.keys(scriptsStore)) {
-    if (!k.startsWith(prefix)) continue;
-    const nodeId = k.slice(prefix.length);
-    const scripts = scriptsStore[k] ?? [];
-    const results = resultsStore[k] ?? {};
+  const [scriptItems, resultItems] = await Promise.all([
+    dbGetAll<TestScript[]>(SCRIPTS_STORE, prefix),
+    dbGetAll<Record<string, ScriptResult>>(RESULTS_STORE, prefix),
+  ]);
+  const resultMap = Object.fromEntries(resultItems.map(({ key, value }) => [key, value]));
+  const out: Record<string, { pass: number; fail: number; error: number; total: number }> = {};
+  for (const { key, value: scripts } of scriptItems) {
+    const nodeId = key.slice(prefix.length);
+    const results = resultMap[key] ?? {};
     const summary = { pass: 0, fail: 0, error: 0, total: scripts.length };
     for (const s of scripts) {
       const r = results[s.id];
-      if (!r) continue;
-      summary[r.status]++;
+      if (r) summary[r.status]++;
     }
     out[nodeId] = summary;
   }
   return out;
 }
 
-export function upsertScript(
+export async function upsertScript(
   targetKey: string,
   nodeId: string,
   input: Omit<TestScript, "createdAt" | "updatedAt"> & { createdAt?: number }
-): TestScript {
-  const store = readStore<ScriptStore>(SCRIPTS_KEY);
-  const key = compositeKey(targetKey, nodeId);
-  const list = store[key] ?? [];
+): Promise<TestScript> {
+  const key = compKey(targetKey, nodeId);
+  const list = (await dbGet<TestScript[]>(SCRIPTS_STORE, key)) ?? [];
   const now = Date.now();
   const existing = list.find((t) => t.id === input.id);
   const ts: TestScript = {
@@ -132,57 +91,50 @@ export function upsertScript(
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now,
   };
-  const nextList = existing
-    ? list.map((t) => (t.id === ts.id ? ts : t))
-    : [...list, ts];
-  store[key] = nextList;
-  writeStore(SCRIPTS_KEY, store);
+  const nextList = existing ? list.map((t) => (t.id === ts.id ? ts : t)) : [...list, ts];
+  await dbSet(SCRIPTS_STORE, key, nextList);
   emit();
   return ts;
 }
 
-export function deleteScript(targetKey: string, nodeId: string, id: string) {
-  const store = readStore<ScriptStore>(SCRIPTS_KEY);
-  const key = compositeKey(targetKey, nodeId);
-  store[key] = (store[key] ?? []).filter((t) => t.id !== id);
-  if (store[key].length === 0) delete store[key];
-  writeStore(SCRIPTS_KEY, store);
-
-  const results = readStore<ResultStore>(RESULTS_KEY);
-  if (results[key]) {
-    delete results[key][id];
-    if (Object.keys(results[key]).length === 0) delete results[key];
-    writeStore(RESULTS_KEY, results);
+export async function deleteScript(targetKey: string, nodeId: string, id: string): Promise<void> {
+  const key = compKey(targetKey, nodeId);
+  const list = ((await dbGet<TestScript[]>(SCRIPTS_STORE, key)) ?? []).filter((t) => t.id !== id);
+  if (list.length === 0) {
+    await dbDelete(SCRIPTS_STORE, key);
+  } else {
+    await dbSet(SCRIPTS_STORE, key, list);
   }
-
+  const results = (await dbGet<Record<string, ScriptResult>>(RESULTS_STORE, key)) ?? {};
+  delete results[id];
+  if (Object.keys(results).length === 0) {
+    await dbDelete(RESULTS_STORE, key);
+  } else {
+    await dbSet(RESULTS_STORE, key, results);
+  }
   emit();
 }
 
-export function saveResult(
+export async function saveResult(
   targetKey: string,
   nodeId: string,
   scriptId: string,
   result: ScriptResult
-) {
-  const store = readStore<ResultStore>(RESULTS_KEY);
-  const key = compositeKey(targetKey, nodeId);
-  if (!store[key]) store[key] = {};
-  store[key][scriptId] = result;
-  writeStore(RESULTS_KEY, store);
+): Promise<void> {
+  const key = compKey(targetKey, nodeId);
+  const results = (await dbGet<Record<string, ScriptResult>>(RESULTS_STORE, key)) ?? {};
+  results[scriptId] = result;
+  await dbSet(RESULTS_STORE, key, results);
   emit();
 }
 
-export function importScript(
+export async function importScript(
   targetKey: string,
   nodeId: string,
   name: string,
   body: string
-): TestScript {
-  return upsertScript(targetKey, nodeId, {
-    id: newId(),
-    name: name.trim() || "Imported script",
-    body,
-  });
+): Promise<TestScript> {
+  return upsertScript(targetKey, nodeId, { id: newId(), name: name.trim() || "Imported script", body });
 }
 
 export function createDraftScript(): Omit<TestScript, "createdAt" | "updatedAt"> {
@@ -202,22 +154,18 @@ export function useScripts(targetKey: string | null, nodeId: string | null) {
   const [scripts, setScripts] = useState<TestScript[]>([]);
 
   const refresh = useCallback(() => {
-    if (!targetKey || !nodeId) {
-      setScripts([]);
-      return;
-    }
-    setScripts(getScripts(targetKey, nodeId));
+    if (!targetKey || !nodeId) { setScripts([]); return; }
+    void getScripts(targetKey, nodeId).then(setScripts);
   }, [targetKey, nodeId]);
 
   useEffect(() => {
     refresh();
     if (!isBrowser()) return;
-    const onChange = () => refresh();
-    window.addEventListener(EVENT, onChange);
-    window.addEventListener("storage", onChange);
+    window.addEventListener(EVENT, refresh);
+    window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(EVENT, onChange);
-      window.removeEventListener("storage", onChange);
+      window.removeEventListener(EVENT, refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
 
@@ -228,22 +176,18 @@ export function useResults(targetKey: string | null, nodeId: string | null) {
   const [results, setResults] = useState<Record<string, ScriptResult>>({});
 
   const refresh = useCallback(() => {
-    if (!targetKey || !nodeId) {
-      setResults({});
-      return;
-    }
-    setResults(getResults(targetKey, nodeId));
+    if (!targetKey || !nodeId) { setResults({}); return; }
+    void getResults(targetKey, nodeId).then(setResults);
   }, [targetKey, nodeId]);
 
   useEffect(() => {
     refresh();
     if (!isBrowser()) return;
-    const onChange = () => refresh();
-    window.addEventListener(EVENT, onChange);
-    window.addEventListener("storage", onChange);
+    window.addEventListener(EVENT, refresh);
+    window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(EVENT, onChange);
-      window.removeEventListener("storage", onChange);
+      window.removeEventListener(EVENT, refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
 
@@ -256,22 +200,18 @@ export function useScriptSummaries(targetKey: string | null) {
   >({});
 
   const refresh = useCallback(() => {
-    if (!targetKey) {
-      setSummaries({});
-      return;
-    }
-    setSummaries(getResultSummary(targetKey));
+    if (!targetKey) { setSummaries({}); return; }
+    void getResultSummary(targetKey).then(setSummaries);
   }, [targetKey]);
 
   useEffect(() => {
     refresh();
     if (!isBrowser()) return;
-    const onChange = () => refresh();
-    window.addEventListener(EVENT, onChange);
-    window.addEventListener("storage", onChange);
+    window.addEventListener(EVENT, refresh);
+    window.addEventListener("storage", refresh);
     return () => {
-      window.removeEventListener(EVENT, onChange);
-      window.removeEventListener("storage", onChange);
+      window.removeEventListener(EVENT, refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
 

@@ -27,6 +27,7 @@ import { QARunModal, buildStartRunResults } from "@/components/qa/QARunModal";
 import { useAIModel } from "@/lib/ai-model";
 import { saveBaseline, clearBaselines, getBaseline } from "@/lib/baselines";
 import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressions";
+import { ExportModal } from "@/components/export/ExportModal";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -163,7 +164,7 @@ function Dashboard() {
     async (tk: string, items: Array<{ nodeId: string; screenshotUrl: string | null }>) => {
       for (const { nodeId, screenshotUrl } of items) {
         if (!screenshotUrl) continue;
-        const baseline = getBaseline(tk, nodeId);
+        const baseline = await getBaseline(tk, nodeId);
         if (!baseline) continue;
         try {
           const res = await fetch("/api/diff", {
@@ -175,7 +176,7 @@ function Dashboard() {
           const data = await res.json() as {
             percentChanged: number; changedPixels: number; totalPixels: number; diffDataUrl: string;
           };
-          saveRegression(tk, nodeId, {
+          await saveRegression(tk, nodeId, {
             percentChanged: data.percentChanged,
             changedPixels: data.changedPixels,
             totalPixels: data.totalPixels,
@@ -192,6 +193,7 @@ function Dashboard() {
   );
 
   const [hasScreenshots, setHasScreenshots] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const swapToDynamic = useCallback((res: UrlAuditResponse) => {
     const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
@@ -310,10 +312,10 @@ function Dashboard() {
   }, [targetInput, targetKey]);
 
   const handleStartQA = useCallback(() => {
-    const seeded = buildStartRunResults(targetKey, nodeMetas);
-    if (seeded.length === 0) return;
-    const qaRun = startRun(targetKey, seeded);
-    setQaRunId(qaRun.id);
+    void buildStartRunResults(targetKey, nodeMetas).then((seeded) => {
+      if (seeded.length === 0) return;
+      return startRun(targetKey, seeded).then((qaRun) => setQaRunId(qaRun.id));
+    });
   }, [targetKey, nodeMetas]);
 
   const handleResumeQA = useCallback((id: string) => {
@@ -323,15 +325,15 @@ function Dashboard() {
   const handleSetBaseline = useCallback(() => {
     setNodes((prev) => {
       for (const n of prev) {
-        if (n.data.screenshotUrl) saveBaseline(targetKey, n.id, n.data.screenshotUrl);
+        if (n.data.screenshotUrl) void saveBaseline(targetKey, n.id, n.data.screenshotUrl);
       }
       return prev;
     });
   }, [targetKey]);
 
   const handleClearBaseline = useCallback(() => {
-    clearBaselines(targetKey);
-    clearRegressions(targetKey);
+    void clearBaselines(targetKey);
+    void clearRegressions(targetKey);
   }, [targetKey]);
 
   const activeQARun = useMemo(
@@ -372,10 +374,12 @@ function Dashboard() {
         running={run.running}
         targetInput={targetInput}
         model={model}
+        hasNodes={nodes.length > 0}
         onTargetChange={setTargetInput}
         onModelChange={setModel}
         onStart={handleStart}
         onStop={run.stop}
+        onExport={() => setExportOpen(true)}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -431,6 +435,15 @@ function Dashboard() {
         targetLabel={targetLabel}
         nodes={nodeMetas}
         onClose={() => setQaRunId(null)}
+      />
+
+      <ExportModal
+        open={exportOpen}
+        nodes={nodes}
+        findingsByNode={findingsByNode}
+        targetLabel={targetLabel}
+        targetInput={targetInput}
+        onClose={() => setExportOpen(false)}
       />
     </div>
   );

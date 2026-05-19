@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { chromium, type Page } from "playwright";
+import { type Page } from "playwright";
+import { launchBrowser } from "@/lib/browser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -117,15 +118,7 @@ export async function POST(req: Request) {
     } satisfies ScriptRunResult);
   }
 
-  const browser = await chromium
-    .launch({
-      headless: true,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    })
+  const browser = await launchBrowser()
     .catch((err: unknown) => {
       logs.push({
         level: "error",

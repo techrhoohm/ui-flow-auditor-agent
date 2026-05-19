@@ -63,23 +63,23 @@ export function QARunModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const byCase = useMemo(() => {
-    const map: Record<string, { case: TestCase; nodeLabel: string }> = {};
-    if (!run) return map;
+  const [byCase, setByCase] = useState<Record<string, { case: TestCase; nodeLabel: string }>>({});
+  useEffect(() => {
+    if (!run) { setByCase({}); return; }
     const nodeLabelById = new Map(nodes.map((n) => [n.id, n.label] as const));
-    const seen = new Set<string>();
-    for (const r of run.results) {
-      if (seen.has(r.testCaseId)) continue;
-      seen.add(r.testCaseId);
-      const cases = getTestCases(targetKey, r.nodeId);
-      const found = cases.find((c) => c.id === r.testCaseId);
-      if (!found) continue;
-      map[r.testCaseId] = {
-        case: found,
-        nodeLabel: nodeLabelById.get(r.nodeId) ?? r.nodeId,
-      };
-    }
-    return map;
+    void (async () => {
+      const map: Record<string, { case: TestCase; nodeLabel: string }> = {};
+      const seen = new Set<string>();
+      for (const r of run.results) {
+        if (seen.has(r.testCaseId)) continue;
+        seen.add(r.testCaseId);
+        const cases = await getTestCases(targetKey, r.nodeId);
+        const found = cases.find((c) => c.id === r.testCaseId);
+        if (!found) continue;
+        map[r.testCaseId] = { case: found, nodeLabel: nodeLabelById.get(r.nodeId) ?? r.nodeId };
+      }
+      setByCase(map);
+    })();
   }, [run, nodes, targetKey]);
 
   const summary = useMemo(() => (run ? summarize(run) : null), [run]);
@@ -161,7 +161,7 @@ export function QARunModal({
                 <button
                   type="button"
                   onClick={() => {
-                    finishRun(targetKey, run.id);
+                    void finishRun(targetKey, run.id);
                     onClose();
                   }}
                   className="rounded-md border border-violet-400/40 bg-violet-500/15 px-3 py-1.5 text-[12px] font-medium text-violet-200 hover:bg-violet-500/25"
@@ -235,7 +235,7 @@ export function QARunModal({
                                   key={s}
                                   type="button"
                                   onClick={() =>
-                                    setResult(targetKey, run.id, r.testCaseId, s)
+                                    void setResult(targetKey, run.id, r.testCaseId, s)
                                   }
                                   className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
                                     r.status === s
@@ -259,7 +259,7 @@ export function QARunModal({
                             placeholder="Notes — what you saw, links, repro steps…"
                             value={r.notes}
                             onChange={(e) =>
-                              setResult(
+                              void setResult(
                                 targetKey,
                                 run.id,
                                 r.testCaseId,
@@ -311,15 +311,15 @@ function Chip({
   );
 }
 
-export function buildStartRunResults(
+export async function buildStartRunResults(
   targetKey: string,
   nodes: NodeMeta[]
-): Array<{ testCaseId: string; nodeId: string }> {
-  const counts = getTestCaseCounts(targetKey);
+): Promise<Array<{ testCaseId: string; nodeId: string }>> {
+  const counts = await getTestCaseCounts(targetKey);
   const out: Array<{ testCaseId: string; nodeId: string }> = [];
   for (const n of nodes) {
     if (!counts[n.id]) continue;
-    const cases = getTestCases(targetKey, n.id);
+    const cases = await getTestCases(targetKey, n.id);
     for (const c of cases) {
       out.push({ testCaseId: c.id, nodeId: n.id });
     }

@@ -1,0 +1,25 @@
+{
+  "functions": {
+    "app/api/audit/url/route.ts": {
+      "memory": 1024,
+      "maxDuration": 120
+    },
+    "app/api/test/run/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "app/api/diff/route.ts": {
+      "memory": 512,
+      "maxDuration": 30
+    },
+    "app/api/integrations/github/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/integrations/slack/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "ANTHROPIC_API_KEY": "@anthropic_api_key"
+  }
+}

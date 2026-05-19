@@ -9,10 +9,12 @@ type Props = {
   running: boolean;
   targetInput: string;
   model: string;
+  hasNodes: boolean;
   onTargetChange: (value: string) => void;
   onModelChange: (id: string) => void;
   onStart: () => void;
   onStop: () => void;
+  onExport: () => void;
 };
 
 const COLOR_CLASSES: Record<string, { badge: string; text: string }> = {
@@ -42,10 +44,12 @@ export function Topbar({
   running,
   targetInput,
   model,
+  hasNodes,
   onTargetChange,
   onModelChange,
   onStart,
   onStop,
+  onExport,
 }: Props) {
   const [local, setLocal] = useState(targetInput);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -122,7 +126,7 @@ export function Topbar({
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 12 · Smart Target
+            Milestone 15 · IndexedDB
           </span>
         </div>
       </div>
@@ -228,6 +232,20 @@ export function Topbar({
       {/* Right — model + run controls */}
       <div className="flex items-center gap-3">
         <ModelPicker model={model} onChange={onModelChange} />
+
+        <button
+          type="button"
+          disabled={!hasNodes}
+          onClick={onExport}
+          title="Export & Share"
+          className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-zinc-300 transition-colors hover:enabled:border-violet-400/40 hover:enabled:bg-violet-500/10 hover:enabled:text-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+            <path d="M8.75 2.75a.75.75 0 0 0-1.5 0v5.69L5.03 6.22a.75.75 0 0 0-1.06 1.06l3.5 3.5a.75.75 0 0 0 1.06 0l3.5-3.5a.75.75 0 0 0-1.06-1.06L8.75 8.44V2.75Z" />
+            <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+          </svg>
+          Export
+        </button>
 
         {running ? (
           <button
