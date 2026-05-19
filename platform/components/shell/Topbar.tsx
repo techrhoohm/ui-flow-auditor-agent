@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ModelPicker } from "./ModelPicker";
 
 export type AuditTarget = "demo" | "vitalsapp" | "url";
 
@@ -8,8 +9,10 @@ type Props = {
   running: boolean;
   target: AuditTarget;
   url: string;
+  model: string;
   onTargetChange: (t: AuditTarget) => void;
   onUrlChange: (u: string) => void;
+  onModelChange: (id: string) => void;
   onStart: () => void;
   onStop: () => void;
 };
@@ -24,8 +27,10 @@ export function Topbar({
   running,
   target,
   url,
+  model,
   onTargetChange,
   onUrlChange,
+  onModelChange,
   onStart,
   onStop,
 }: Props) {
@@ -48,7 +53,7 @@ export function Topbar({
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 5 · Crawl any URL
+            Milestone 10 · AI Assist
           </span>
         </div>
       </div>
@@ -93,6 +98,8 @@ export function Topbar({
             className="w-64 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none disabled:opacity-50"
           />
         )}
+
+        <ModelPicker model={model} onChange={onModelChange} />
 
         {running ? (
           <button

@@ -18,9 +18,15 @@ import {
   parseMdTestCases,
 } from "@/lib/import-parsers";
 
+type AuditFinding = { message: string; severity: string };
+
 type Props = {
   targetKey: string;
   nodeId: string;
+  nodeLabel: string;
+  nodeKind: string;
+  findings: AuditFinding[];
+  model: string;
 };
 
 const PRIORITY_OPTIONS: Priority[] = ["P0", "P1", "P2"];
@@ -48,12 +54,59 @@ const TYPE_LABEL: Record<TestType, string> = {
 
 type DraftState = ReturnType<typeof createDraft>;
 
-export function TestCasesTab({ targetKey, nodeId }: Props) {
+type SuggestedCase = {
+  title: string;
+  body: string;
+  priority: Priority;
+  type: TestType;
+};
+
+export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings, model }: Props) {
   const cases = useTestCases(targetKey, nodeId);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<SuggestedCase[]>([]);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState<Set<number>>(new Set());
+
+  const askNora = async () => {
+    setSuggesting(true);
+    setSuggestions([]);
+    setSuggestError(null);
+    setAccepted(new Set());
+    try {
+      const res = await fetch("/api/ai/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeId, nodeLabel, nodeKind, findings, model }),
+      });
+      const data = await res.json() as { suggestions?: SuggestedCase[]; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setSuggestions(data.suggestions ?? []);
+    } catch (err) {
+      setSuggestError(err instanceof Error ? err.message : "Suggestion failed");
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const acceptSuggestion = (i: number) => {
+    const s = suggestions[i];
+    if (!s) return;
+    importTestCases(targetKey, nodeId, [s]);
+    setAccepted((prev) => new Set([...prev, i]));
+  };
+
+  const acceptAll = () => {
+    const remaining = suggestions.filter((_, i) => !accepted.has(i));
+    if (remaining.length > 0) {
+      importTestCases(targetKey, nodeId, remaining);
+      setAccepted(new Set(suggestions.map((_, i) => i)));
+    }
+  };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -133,6 +186,15 @@ export function TestCasesTab({ targetKey, nodeId }: Props) {
           <div className="flex items-center gap-1.5">
             <button
               type="button"
+              onClick={askNora}
+              disabled={suggesting}
+              title="Ask Nora to suggest test cases based on findings"
+              className="rounded-md border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-300 transition-colors hover:bg-violet-500/20 disabled:cursor-wait disabled:opacity-50"
+            >
+              {suggesting ? "Asking…" : "✦ Ask Nora"}
+            </button>
+            <button
+              type="button"
               onClick={() => fileRef.current?.click()}
               title="Import from .json, .csv, or .md"
               className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
@@ -165,6 +227,76 @@ export function TestCasesTab({ targetKey, nodeId }: Props) {
             }`}
           >
             {importMsg.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {suggestError && (
+        <div className="mt-2 rounded-md border border-rose-500/30 bg-rose-500/5 px-3 py-1.5 text-[11px] text-rose-300">
+          {suggestError}
+        </div>
+      )}
+
+      <AnimatePresence>
+        {suggestions.length > 0 && (
+          <motion.div
+            key="suggestions"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mt-3 rounded-md border border-violet-400/25 bg-violet-500/5 p-3"
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-[10px] uppercase tracking-wider text-violet-400">
+                Nora suggests ({suggestions.length})
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={acceptAll}
+                  className="text-[10px] font-medium text-violet-300 hover:text-violet-100"
+                >
+                  Accept all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSuggestions([])}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <ul className="space-y-2">
+              {suggestions.map((s, i) => {
+                const isAccepted = accepted.has(i);
+                return (
+                  <li key={i} className={`rounded-md border p-2.5 transition-colors ${isAccepted ? "border-emerald-500/25 bg-emerald-500/5" : "border-zinc-800 bg-zinc-900/60"}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={`text-[12px] font-medium ${isAccepted ? "text-zinc-400 line-through" : "text-zinc-100"}`}>
+                          {s.title}
+                        </p>
+                        <div className="mt-1 flex items-center gap-1.5 font-mono text-[9px]">
+                          <span className={`rounded-full border px-1.5 py-0.5 ${PRIORITY_STYLE[s.priority]}`}>{s.priority}</span>
+                          <span className={`rounded-full border px-1.5 py-0.5 ${TYPE_STYLE[s.type]}`}>{TYPE_LABEL[s.type]}</span>
+                        </div>
+                      </div>
+                      {!isAccepted && (
+                        <button
+                          type="button"
+                          onClick={() => acceptSuggestion(i)}
+                          className="shrink-0 rounded-md border border-violet-400/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-300 hover:bg-violet-500/20"
+                        >
+                          Accept
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           </motion.div>
         )}
       </AnimatePresence>

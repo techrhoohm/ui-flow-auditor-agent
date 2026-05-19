@@ -20,6 +20,8 @@ type Props = {
   targetKey: string;
   nodeId: string;
   nodeUrl: string | null;
+  nodeLabel: string;
+  model: string;
 };
 
 const STATUS_STYLE: Record<ScriptRunStatus, string> = {
@@ -36,7 +38,7 @@ const STATUS_LABEL: Record<ScriptRunStatus, string> = {
 
 type Draft = ReturnType<typeof createDraftScript>;
 
-export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
+export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Props) {
   const scripts = useScripts(targetKey, nodeId);
   const results = useResults(targetKey, nodeId);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -44,8 +46,34 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [importMsg, setImportMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [noraDescription, setNoraDescription] = useState("");
+  const [noraGenerating, setNoraGenerating] = useState(false);
+  const [noraError, setNoraError] = useState<string | null>(null);
+  const [showNoraInput, setShowNoraInput] = useState(false);
 
   const canRun = !!nodeUrl;
+
+  const generateScript = async () => {
+    if (!noraDescription.trim()) return;
+    setNoraGenerating(true);
+    setNoraError(null);
+    try {
+      const res = await fetch("/api/ai/script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: noraDescription, nodeLabel, nodeUrl, model }),
+      });
+      const data = await res.json() as { name?: string; body?: string; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+      importScript(targetKey, nodeId, data.name ?? noraDescription, data.body ?? "");
+      setNoraDescription("");
+      setShowNoraInput(false);
+    } catch (err) {
+      setNoraError(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setNoraGenerating(false);
+    }
+  };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -170,6 +198,14 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
           <div className="flex items-center gap-1.5">
             <button
               type="button"
+              onClick={() => setShowNoraInput((v) => !v)}
+              title="Ask Nora to write a Playwright script from a description"
+              className="rounded-md border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-300 transition-colors hover:bg-violet-500/20"
+            >
+              ✦ Ask Nora
+            </button>
+            <button
+              type="button"
               onClick={() => fileRef.current?.click()}
               title="Import a .ts or .js Playwright script"
               className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
@@ -202,6 +238,52 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
             }`}
           >
             {importMsg.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showNoraInput && (
+          <motion.div
+            key="nora-input"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18 }}
+            className="mt-3 rounded-md border border-violet-400/25 bg-violet-500/5 p-3"
+          >
+            <div className="mb-1.5 text-[9px] uppercase tracking-wider text-violet-400">Describe what the script should test</div>
+            <textarea
+              autoFocus
+              placeholder={`e.g. "Verify the login form rejects invalid email addresses"`}
+              value={noraDescription}
+              onChange={(e) => setNoraDescription(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generateScript();
+              }}
+              rows={3}
+              className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[12px] leading-relaxed text-zinc-200 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none"
+            />
+            {noraError && (
+              <p className="mt-1.5 text-[11px] text-rose-300">{noraError}</p>
+            )}
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setShowNoraInput(false); setNoraDescription(""); setNoraError(null); }}
+                className="text-[11px] text-zinc-500 hover:text-zinc-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={generateScript}
+                disabled={!noraDescription.trim() || noraGenerating}
+                className="rounded-md border border-violet-400/40 bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {noraGenerating ? "Generating…" : "Generate ⌘↵"}
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

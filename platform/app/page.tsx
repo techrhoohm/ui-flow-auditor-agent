@@ -29,6 +29,7 @@ import { useTestCaseCounts } from "@/lib/test-cases";
 import { useScriptSummaries } from "@/lib/test-scripts";
 import { startRun, useQAHistory } from "@/lib/qa-runs";
 import { QARunModal, buildStartRunResults } from "@/components/qa/QARunModal";
+import { useAIModel } from "@/lib/ai-model";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -262,6 +263,7 @@ function Dashboard() {
   const scriptSummaries = useScriptSummaries(targetKey);
   const qaHistory = useQAHistory(targetKey);
   const [qaRunId, setQaRunId] = useState<string | null>(null);
+  const { model, setModel } = useAIModel();
 
   const totalCaseCount = useMemo(
     () => Object.values(testCaseCounts).reduce((a, b) => a + b, 0),
@@ -322,8 +324,10 @@ function Dashboard() {
         running={run.running}
         target={target}
         url={urlInput}
+        model={model}
         onTargetChange={setTarget}
         onUrlChange={setUrlInput}
+        onModelChange={setModel}
         onStart={handleStart}
         onStop={run.stop}
       />
@@ -364,6 +368,7 @@ function Dashboard() {
             data={selectedNode?.data ?? null}
             findings={selectedNodeId ? findingsByNode[selectedNodeId] ?? [] : []}
             targetKey={targetKey}
+            model={model}
             onClose={() => setSelectedNodeId(null)}
           />
         </main>

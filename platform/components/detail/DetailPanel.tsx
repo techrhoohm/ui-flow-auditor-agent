@@ -18,6 +18,7 @@ type Props = {
   data: ScreenNodeData | null;
   findings: AuditFinding[];
   targetKey: string;
+  model: string;
   onClose: () => void;
 };
 
@@ -53,6 +54,7 @@ export function DetailPanel({
   data,
   findings,
   targetKey,
+  model,
   onClose,
 }: Props) {
   const [tab, setTab] = useState<Tab>("findings");
@@ -135,16 +137,18 @@ export function DetailPanel({
 
           <div className="flex-1 overflow-y-auto">
             {tab === "findings" && (
-              <FindingsTab nodeId={nodeId} data={data} findings={findings} />
+              <FindingsTab nodeId={nodeId} data={data} findings={findings} nodeLabel={data.label} model={model} />
             )}
             {tab === "tests" && (
-              <TestCasesTab targetKey={targetKey} nodeId={nodeId} />
+              <TestCasesTab targetKey={targetKey} nodeId={nodeId} nodeLabel={data.label} nodeKind={data.kind} findings={findings} model={model} />
             )}
             {tab === "scripts" && (
               <ScriptsTab
                 targetKey={targetKey}
                 nodeId={nodeId}
                 nodeUrl={data.nodeUrl ?? null}
+                nodeLabel={data.label}
+                model={model}
               />
             )}
           </div>
@@ -204,11 +208,36 @@ function FindingsTab({
   nodeId,
   data,
   findings,
+  nodeLabel,
+  model,
 }: {
   nodeId: string;
   data: ScreenNodeData;
   findings: AuditFinding[];
+  nodeLabel: string;
+  model: string;
 }) {
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
+
+  const explain = async (key: string, message: string, severity: string) => {
+    if (explanations[key] || loading[key]) return;
+    setLoading((prev) => ({ ...prev, [key]: true }));
+    try {
+      const res = await fetch("/api/ai/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, severity, nodeLabel, model }),
+      });
+      const data = await res.json() as { explanation?: string; error?: string };
+      setExplanations((prev) => ({ ...prev, [key]: data.explanation ?? data.error ?? "No explanation." }));
+    } catch {
+      setExplanations((prev) => ({ ...prev, [key]: "Request failed." }));
+    } finally {
+      setLoading((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
   const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
   findings.forEach((f) => counts[f.severity]++);
 
@@ -254,33 +283,58 @@ function FindingsTab({
         ) : (
           <ul className="mt-3 space-y-3">
             {severityOrder.flatMap((sev) =>
-              grouped[sev].map((f, i) => (
-                <li
-                  key={`${sev}-${i}-${f.at}`}
-                  className="rounded-md border border-zinc-800 bg-zinc-900/60 p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${severityChip[sev]}`}
-                    >
+              grouped[sev].map((f, i) => {
+                const key = `${sev}-${i}-${f.at}`;
+                const explanation = explanations[key];
+                const isLoading = loading[key];
+                return (
+                  <li
+                    key={key}
+                    className="rounded-md border border-zinc-800 bg-zinc-900/60 p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
                       <span
-                        className={`h-1.5 w-1.5 rounded-full ${severityDot[sev]}`}
-                      />
-                      {severityLabel[sev]}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-500">
-                      {new Date(f.at).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-[12px] leading-relaxed text-zinc-200">
-                    {f.message}
-                  </p>
-                </li>
-              ))
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${severityChip[sev]}`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${severityDot[sev]}`}
+                        />
+                        {severityLabel[sev]}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {!explanation && (
+                          <button
+                            type="button"
+                            onClick={() => explain(key, f.message, sev)}
+                            disabled={isLoading}
+                            className="text-[10px] font-medium text-violet-400 hover:text-violet-200 disabled:cursor-wait disabled:opacity-50"
+                          >
+                            {isLoading ? "Asking Nora…" : "Explain"}
+                          </button>
+                        )}
+                        <span className="font-mono text-[10px] text-zinc-500">
+                          {new Date(f.at).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[12px] leading-relaxed text-zinc-200">
+                      {f.message}
+                    </p>
+                    {explanation && (
+                      <div className="mt-2 rounded-md border border-violet-400/20 bg-violet-500/5 px-3 py-2">
+                        <div className="mb-1 text-[9px] uppercase tracking-wider text-violet-400">Nora</div>
+                        <p className="text-[11px] leading-relaxed text-zinc-300 whitespace-pre-line">
+                          {explanation}
+                        </p>
+                      </div>
+                    )}
+                  </li>
+                );
+              })
             )}
           </ul>
         )}
