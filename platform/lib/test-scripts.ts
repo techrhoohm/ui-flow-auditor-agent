@@ -172,6 +172,19 @@ export function saveResult(
   emit();
 }
 
+export function importScript(
+  targetKey: string,
+  nodeId: string,
+  name: string,
+  body: string
+): TestScript {
+  return upsertScript(targetKey, nodeId, {
+    id: newId(),
+    name: name.trim() || "Imported script",
+    body,
+  });
+}
+
 export function createDraftScript(): Omit<TestScript, "createdAt" | "updatedAt"> {
   return {
     id: newId(),

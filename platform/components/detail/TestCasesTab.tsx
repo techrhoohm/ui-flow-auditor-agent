@@ -1,16 +1,22 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   createDraft,
   deleteTestCase,
+  importTestCases,
   upsertTestCase,
   useTestCases,
   type Priority,
   type TestCase,
   type TestType,
 } from "@/lib/test-cases";
+import {
+  parseCsvTestCases,
+  parseJsonTestCases,
+  parseMdTestCases,
+} from "@/lib/import-parsers";
 
 type Props = {
   targetKey: string;
@@ -46,6 +52,31 @@ export function TestCasesTab({ targetKey, nodeId }: Props) {
   const cases = useTestCases(targetKey, nodeId);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [importMsg, setImportMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      try {
+        let parsed;
+        if (file.name.endsWith(".json")) parsed = parseJsonTestCases(text);
+        else if (file.name.endsWith(".csv")) parsed = parseCsvTestCases(text);
+        else if (file.name.endsWith(".md") || file.name.endsWith(".markdown")) parsed = parseMdTestCases(text);
+        else throw new Error("Unsupported format. Use .json, .csv, or .md");
+        const count = importTestCases(targetKey, nodeId, parsed);
+        setImportMsg({ text: `Imported ${count} case${count === 1 ? "" : "s"}`, ok: true });
+      } catch (err) {
+        setImportMsg({ text: err instanceof Error ? err.message : "Import failed", ok: false });
+      }
+      setTimeout(() => setImportMsg(null), 3500);
+    };
+    reader.readAsText(file);
+  };
 
   const startNew = () => {
     setEditingId(null);
@@ -81,6 +112,14 @@ export function TestCasesTab({ targetKey, nodeId }: Props) {
 
   return (
     <div className="px-5 pb-6">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,.csv,.md,.markdown"
+        className="hidden"
+        onChange={handleFileImport}
+      />
+
       <div className="mt-4 flex items-center justify-between">
         <div>
           <div className="text-[10px] uppercase tracking-wider text-zinc-500">
@@ -91,15 +130,44 @@ export function TestCasesTab({ targetKey, nodeId }: Props) {
           </p>
         </div>
         {!draft && (
-          <button
-            type="button"
-            onClick={startNew}
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 transition-colors hover:border-violet-400/40 hover:text-violet-200"
-          >
-            + Add
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              title="Import from .json, .csv, or .md"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              Import
+            </button>
+            <button
+              type="button"
+              onClick={startNew}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              + Add
+            </button>
+          </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {importMsg && (
+          <motion.div
+            key="import-msg"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className={`mt-2 rounded-md border px-3 py-1.5 text-[11px] ${
+              importMsg.ok
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+            }`}
+          >
+            {importMsg.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {draft && (

@@ -1,10 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   createDraftScript,
   deleteScript,
+  importScript,
   saveResult,
   upsertScript,
   useResults,
@@ -13,6 +14,7 @@ import {
   type ScriptRunStatus,
   type TestScript,
 } from "@/lib/test-scripts";
+import { parseScriptFile } from "@/lib/import-parsers";
 
 type Props = {
   targetKey: string;
@@ -40,8 +42,29 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [importMsg, setImportMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const canRun = !!nodeUrl;
+
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      try {
+        const parsed = parseScriptFile(file.name, text);
+        importScript(targetKey, nodeId, parsed.name, parsed.body);
+        setImportMsg({ text: `Imported "${parsed.name}"`, ok: true });
+      } catch (err) {
+        setImportMsg({ text: err instanceof Error ? err.message : "Import failed", ok: false });
+      }
+      setTimeout(() => setImportMsg(null), 3500);
+    };
+    reader.readAsText(file);
+  };
 
   const startNew = () => {
     setEditingId(null);
@@ -116,6 +139,14 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
 
   return (
     <div className="px-5 pb-6">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".ts,.js,.mts,.mjs,.cjs,.cts"
+        className="hidden"
+        onChange={handleFileImport}
+      />
+
       {!canRun && (
         <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
           Scripts run against a live URL. Use the Web URL target with this node
@@ -136,15 +167,44 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl }: Props) {
           </p>
         </div>
         {!draft && (
-          <button
-            type="button"
-            onClick={startNew}
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 transition-colors hover:border-violet-400/40 hover:text-violet-200"
-          >
-            + Add
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              title="Import a .ts or .js Playwright script"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              Import
+            </button>
+            <button
+              type="button"
+              onClick={startNew}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              + Add
+            </button>
+          </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {importMsg && (
+          <motion.div
+            key="script-import-msg"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className={`mt-2 rounded-md border px-3 py-1.5 text-[11px] ${
+              importMsg.ok
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+            }`}
+          >
+            {importMsg.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {draft && (

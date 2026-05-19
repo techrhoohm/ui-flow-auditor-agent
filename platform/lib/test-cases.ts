@@ -119,6 +119,40 @@ export function deleteTestCase(
   emitChange();
 }
 
+export function importTestCases(
+  targetKey: string,
+  nodeId: string,
+  items: Array<{ title: string; body?: string; priority?: Priority; type?: TestType }>
+): number {
+  const VALID_P = new Set<Priority>(["P0", "P1", "P2"]);
+  const VALID_T = new Set<TestType>(["functional", "visual", "a11y", "perf"]);
+  const store = readStore();
+  const key = compositeKey(targetKey, nodeId);
+  const list = store[key] ?? [];
+  const now = Date.now();
+  let added = 0;
+  for (const item of items) {
+    const title = item.title?.trim();
+    if (!title) continue;
+    list.push({
+      id: newId(),
+      title,
+      body: item.body?.trim() ?? "",
+      priority: VALID_P.has(item.priority as Priority) ? (item.priority as Priority) : "P1",
+      type: VALID_T.has(item.type as TestType) ? (item.type as TestType) : "functional",
+      createdAt: now,
+      updatedAt: now,
+    });
+    added++;
+  }
+  if (added > 0) {
+    store[key] = list;
+    writeStore(store);
+    emitChange();
+  }
+  return added;
+}
+
 export function createDraft(): Omit<TestCase, "createdAt" | "updatedAt"> {
   return {
     id: newId(),
