@@ -662,6 +662,17 @@ function parsePlist(xml: string): Record<string, string> {
 }
 
 export async function POST(req: Request) {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return NextResponse.json(
+      {
+        error:
+          "macOS app auditing requires the server to run on your local Mac. " +
+          "Run `npm run dev` inside the platform folder and open http://localhost:3000.",
+      },
+      { status: 400 }
+    );
+  }
+
   let body: { path?: string };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }

@@ -5,6 +5,15 @@ import { ModelPicker } from "./ModelPicker";
 import { detectPlatform } from "@/lib/platform-detect";
 import { addToHistory, getHistory, type TargetHistoryEntry } from "@/lib/target-history";
 
+function useIsRemote() {
+  const [isRemote, setIsRemote] = useState(false);
+  useEffect(() => {
+    const h = window.location.hostname;
+    setIsRemote(h !== "localhost" && h !== "127.0.0.1" && h !== "::1");
+  }, []);
+  return isRemote;
+}
+
 type Props = {
   running: boolean;
   targetInput: string;
@@ -113,9 +122,13 @@ export function Topbar({
   };
 
   const canStart = local.trim().length > 0;
+  const isRemote = useIsRemote();
+  const platform = detectPlatform(local);
+  const showLocalOnlyBanner = isRemote && (platform.kind === "macos" || platform.kind === "ios" || platform.kind === "android" || platform.kind === "flutter" || platform.kind === "reactnative");
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950/70 px-4 backdrop-blur">
+    <div className="shrink-0">
+    <header className="flex h-12 items-center justify-between border-b border-zinc-800 bg-zinc-950/70 px-4 backdrop-blur">
       {/* Left — brand */}
       <div className="flex items-center gap-3">
         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-violet-400/40 bg-violet-500/10 font-mono text-[11px] text-violet-300">
@@ -126,7 +139,7 @@ export function Topbar({
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 15 · IndexedDB
+            Milestone 16 · Vercel
           </span>
         </div>
       </div>
@@ -271,5 +284,17 @@ export function Topbar({
         )}
       </div>
     </header>
+    {showLocalOnlyBanner && (
+      <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/5 px-4 py-1.5">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3 shrink-0 text-amber-400">
+          <path fillRule="evenodd" d="M6.701 2.25c.577-1 2.02-1 2.598 0l5.196 9a1.5 1.5 0 0 1-1.299 2.25H2.804a1.5 1.5 0 0 1-1.3-2.25l5.197-9ZM8 4a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 8 4Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+        </svg>
+        <span className="text-[11px] text-amber-300">
+          <span className="font-semibold">{platform.label} auditing requires a local server.</span>
+          {" "}Run <code className="rounded bg-amber-500/10 px-1 font-mono text-amber-200">npm run dev</code> in the <code className="rounded bg-amber-500/10 px-1 font-mono text-amber-200">platform/</code> folder and open <code className="rounded bg-amber-500/10 px-1 font-mono text-amber-200">http://localhost:3000</code>.
+        </span>
+      </div>
+    )}
+    </div>
   );
 }
