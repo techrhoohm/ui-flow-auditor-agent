@@ -1,49 +1,118 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker";
-
-export type AuditTarget = "demo" | "vitalsapp" | "url";
+import { detectPlatform } from "@/lib/platform-detect";
+import { addToHistory, getHistory, type TargetHistoryEntry } from "@/lib/target-history";
 
 type Props = {
   running: boolean;
-  target: AuditTarget;
-  url: string;
+  targetInput: string;
   model: string;
-  onTargetChange: (t: AuditTarget) => void;
-  onUrlChange: (u: string) => void;
+  onTargetChange: (value: string) => void;
   onModelChange: (id: string) => void;
   onStart: () => void;
   onStop: () => void;
 };
 
-const TARGET_LABEL: Record<AuditTarget, string> = {
-  demo: "Demo",
-  vitalsapp: "VitalsApp",
-  url: "Web URL",
+const COLOR_CLASSES: Record<string, { badge: string; text: string }> = {
+  violet: { badge: "border-violet-400/40 bg-violet-500/10", text: "text-violet-300" },
+  sky: { badge: "border-sky-400/40 bg-sky-500/10", text: "text-sky-300" },
+  teal: { badge: "border-teal-400/40 bg-teal-500/10", text: "text-teal-300" },
+  emerald: { badge: "border-emerald-400/40 bg-emerald-500/10", text: "text-emerald-300" },
+  cyan: { badge: "border-cyan-400/40 bg-cyan-500/10", text: "text-cyan-300" },
+  zinc: { badge: "border-zinc-600/60 bg-zinc-800/50", text: "text-zinc-400" },
 };
+
+function PlatformBadge({ input }: { input: string }) {
+  const platform = detectPlatform(input || "");
+  const colors = COLOR_CLASSES[platform.color] ?? COLOR_CLASSES.zinc;
+
+  return (
+    <div
+      className={`flex h-6 w-14 shrink-0 items-center justify-center rounded-md border font-mono text-[10px] font-semibold uppercase tracking-wider transition-colors ${colors.badge} ${colors.text}`}
+      title={`Detected: ${platform.label}`}
+    >
+      {platform.label}
+    </div>
+  );
+}
 
 export function Topbar({
   running,
-  target,
-  url,
+  targetInput,
   model,
   onTargetChange,
-  onUrlChange,
   onModelChange,
   onStart,
   onStop,
 }: Props) {
-  const [local, setLocal] = useState(url);
+  const [local, setLocal] = useState(targetInput);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<TargetHistoryEntry[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => setLocal(url), [url]);
+  // Sync external changes in
+  useEffect(() => setLocal(targetInput), [targetInput]);
+
+  // Load history when dropdown opens
+  useEffect(() => {
+    if (historyOpen) {
+      setHistory(getHistory());
+    }
+  }, [historyOpen]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [historyOpen]);
 
   const commit = () => {
-    onUrlChange(local.trim());
+    const trimmed = local.trim();
+    onTargetChange(trimmed);
   };
+
+  const handleFolderPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // webkitRelativePath gives us "folderName/file.ext" — extract the root folder name
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name;
+    const folderName = rel.split("/")[0] ?? file.name;
+    const newVal = `~/${folderName}`;
+    setLocal(newVal);
+    onTargetChange(newVal);
+    // reset so the same folder can be picked again
+    e.target.value = "";
+  };
+
+  const handleHistorySelect = (entry: TargetHistoryEntry) => {
+    setLocal(entry.input);
+    onTargetChange(entry.input);
+    setHistoryOpen(false);
+  };
+
+  const handleStart = () => {
+    const trimmed = local.trim();
+    if (trimmed) {
+      const platform = detectPlatform(trimmed);
+      addToHistory(trimmed, platform.label);
+    }
+    onStart();
+  };
+
+  const canStart = local.trim().length > 0;
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950/70 px-4 backdrop-blur">
+      {/* Left — brand */}
       <div className="flex items-center gap-3">
         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-violet-400/40 bg-violet-500/10 font-mono text-[11px] text-violet-300">
           N
@@ -53,52 +122,111 @@ export function Topbar({
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 10 · AI Assist
+            Milestone 12 · Smart Target
           </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
-          {(["demo", "vitalsapp", "url"] as const).map((t) => {
-            const isActive = target === t;
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => onTargetChange(t)}
-                disabled={running}
-                className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
-                  isActive
-                    ? "bg-violet-500/15 text-violet-200"
-                    : "text-zinc-400 hover:text-zinc-200"
-                } disabled:cursor-not-allowed disabled:opacity-50`}
-                title={running ? "Stop the current run to switch targets" : ""}
-              >
-                {TARGET_LABEL[t]}
-              </button>
-            );
-          })}
-        </div>
+      {/* Center — smart target bar */}
+      <div className="flex flex-1 items-center gap-2 px-6">
+        <PlatformBadge input={local} />
 
-        {target === "url" && (
-          <input
-            type="url"
-            value={local}
-            onChange={(e) => setLocal(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                commit();
-                if (!running) onStart();
-              }
-            }}
+        {/* Main input */}
+        <input
+          type="text"
+          value={local}
+          onChange={(e) => setLocal(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commit();
+              if (!running && canStart) handleStart();
+            }
+          }}
+          disabled={running}
+          placeholder="Paste a URL or drop an app folder path…"
+          className="min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none disabled:opacity-50"
+        />
+
+        {/* Folder picker */}
+        <button
+          type="button"
+          disabled={running}
+          onClick={() => fileInputRef.current?.click()}
+          title="Pick a local app folder"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-400 transition-colors hover:enabled:border-zinc-600 hover:enabled:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3.5 w-3.5"
+          >
+            <path d="M2 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z" />
+          </svg>
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          // @ts-expect-error — webkitdirectory is a non-standard but widely supported attribute
+          webkitdirectory=""
+          multiple
+          className="hidden"
+          onChange={handleFolderPick}
+        />
+
+        {/* Recent targets dropdown */}
+        <div ref={dropdownRef} className="relative">
+          <button
+            type="button"
             disabled={running}
-            placeholder="https://example.com"
-            className="w-64 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none disabled:opacity-50"
-          />
-        )}
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="Recent targets"
+            className="flex h-7 items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[10px] font-medium text-zinc-400 transition-colors hover:enabled:border-zinc-600 hover:enabled:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Recent
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              className="h-3 w-3"
+            >
+              <path
+                fillRule="evenodd"
+                d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
 
+          {historyOpen && (
+            <div className="absolute left-0 top-full z-50 mt-1 min-w-[260px] rounded-md border border-zinc-800 bg-zinc-950 py-1 shadow-xl">
+              {history.length === 0 ? (
+                <p className="px-3 py-2 text-[11px] text-zinc-500">No recent targets.</p>
+              ) : (
+                history.map((entry) => (
+                  <button
+                    key={entry.input}
+                    type="button"
+                    onClick={() => handleHistorySelect(entry)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-800/60"
+                  >
+                    <span className="shrink-0 rounded border border-zinc-700 px-1 py-0.5 font-mono text-[9px] uppercase text-zinc-500">
+                      {detectPlatform(entry.input).label}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300">
+                      {entry.input}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right — model + run controls */}
+      <div className="flex items-center gap-3">
         <ModelPicker model={model} onChange={onModelChange} />
 
         {running ? (
@@ -116,8 +244,8 @@ export function Topbar({
         ) : (
           <button
             type="button"
-            onClick={onStart}
-            disabled={target === "url" && !url}
+            onClick={handleStart}
+            disabled={!canStart}
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-zinc-200 transition-colors hover:enabled:border-violet-400/40 hover:enabled:bg-violet-500/10 hover:enabled:text-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Start audit

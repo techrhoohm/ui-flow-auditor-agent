@@ -32,7 +32,7 @@ export function FlowCanvas({
   const nodeTypes = useMemo(() => ({ screen: ScreenNode }), []);
 
   return (
-    <div className="h-full w-full">
+    <div className="relative h-full w-full">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -63,6 +63,15 @@ export function FlowCanvas({
           className="!border-zinc-800 !bg-zinc-900/80"
         />
       </ReactFlow>
+
+      {nodes.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="text-center text-[13px] text-zinc-500">
+            <div>No audit yet.</div>
+            <div>Paste a URL or folder path above and start.</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

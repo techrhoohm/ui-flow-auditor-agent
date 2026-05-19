@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
 export type CrawlPage = {
   id: string;
@@ -191,6 +191,34 @@ export async function crawlSite(
       }
     }
 
+    // Interactive pass — discover SPA routes via click navigation
+    if (Date.now() < deadline && pages.length < opts.maxPages) {
+      const remaining = opts.maxPages - pages.length;
+      if (remaining > 0) {
+        try {
+          const interactivePages = await exploreNavClicks(
+            context,
+            root.toString(),
+            origin,
+            visited,
+            Math.min(remaining, 4),
+            Math.min(opts.perPageTimeoutMs, 12000)
+          );
+          let ic = counter;
+          for (const ip of interactivePages) {
+            if (pages.length >= opts.maxPages) break;
+            const newId = `interact-${++ic}`;
+            visited.set(canonicalize(ip.url), newId);
+            pages.push({ ...ip, id: newId, parentId: "entry" });
+            edges.push({ source: "entry", target: newId });
+          }
+          counter = ic;
+        } catch {
+          // interactive pass is best-effort
+        }
+      }
+    }
+
     await context.close();
   } finally {
     if (browser) await browser.close().catch(() => {});
@@ -203,6 +231,208 @@ export async function crawlSite(
     pages,
     edges,
   };
+}
+
+/**
+ * Opens the entry page, finds nav elements, and clicks through them to discover
+ * SPA routes that wouldn't appear in the static href BFS.
+ */
+async function exploreNavClicks(
+  context: BrowserContext,
+  entryUrl: string,
+  origin: string,
+  visited: Map<string, string>,
+  maxNew: number,
+  timeout: number
+): Promise<Omit<CrawlPage, "id">[]> {
+  const results: Omit<CrawlPage, "id">[] = [];
+  const page = await context.newPage();
+
+  try {
+    page.setDefaultTimeout(timeout);
+    await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout });
+    await page
+      .waitForLoadState("networkidle", { timeout: Math.min(4000, timeout) })
+      .catch(() => {});
+
+    // Gather nav targets
+    type NavTarget = { href: string | null; text: string; index: number };
+    const navTargets: NavTarget[] = await page.evaluate((rootOrigin) => {
+      const selectors = [
+        "nav a",
+        "header a",
+        "[role='tab']",
+        "[role='menuitem']",
+        "[role='navigation'] a",
+        ".nav a",
+        ".tabs a",
+        ".navbar a",
+        ".sidebar a",
+        "a[class*='nav']",
+        "a[class*='tab']",
+      ];
+
+      const SKIP_TEXT = /sign.?out|log.?out|delete|sign.?up|register/i;
+
+      const seen = new Set<string>();
+      const out: NavTarget[] = [];
+      let globalIndex = 0;
+
+      for (const sel of selectors) {
+        const els = Array.from(document.querySelectorAll<HTMLElement>(sel));
+        for (const el of els) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          const text = (el.textContent ?? "").trim();
+          if (SKIP_TEXT.test(text)) continue;
+
+          const anchor = el as HTMLAnchorElement;
+          let href: string | null = null;
+          if (anchor.href) {
+            try {
+              const u = new URL(anchor.href);
+              if (u.origin === rootOrigin) href = u.toString();
+              else if (anchor.href.startsWith("#") || anchor.href.startsWith("/")) {
+                href = anchor.href;
+              }
+            } catch {
+              href = null;
+            }
+          }
+
+          const key = href ?? text;
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          out.push({ href, text, index: globalIndex++ });
+        }
+      }
+
+      return out.slice(0, 8);
+    }, origin);
+
+    for (const target of navTargets) {
+      if (results.length >= maxNew) break;
+
+      // If it has a same-origin href, navigate to it
+      if (target.href && target.href.startsWith("http")) {
+        const canonical = canonicalize(target.href);
+        if (visited.has(canonical)) continue;
+        try {
+          await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: Math.min(8000, timeout) });
+          await page
+            .waitForLoadState("networkidle", { timeout: Math.min(3000, timeout) })
+            .catch(() => {});
+          const result = await capturePageState(page, target.href, timeout);
+          if (result) results.push({ ...result, depth: 1, parentId: "entry" });
+          // Navigate back
+          await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6000, timeout) }).catch(() => {});
+          await page.waitForLoadState("networkidle", { timeout: 2000 }).catch(() => {});
+        } catch {
+          // skip failed nav
+          await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6000, timeout) }).catch(() => {});
+        }
+        continue;
+      }
+
+      // SPA tab / button — click it
+      try {
+        const titleBefore = await page.title().catch(() => "");
+        const urlBefore = page.url();
+
+        const elements = await page.$$(
+          `[role='tab'], [role='menuitem'], nav a, header a, .nav a, .tabs a, .navbar a, a[class*='nav'], a[class*='tab']`
+        );
+        // Re-query by text match
+        let clicked = false;
+        for (const el of elements) {
+          const text = await el.textContent().catch(() => "");
+          if (text?.trim() === target.text) {
+            await el.click({ timeout: 2000 }).catch(() => {});
+            clicked = true;
+            break;
+          }
+        }
+        if (!clicked) continue;
+
+        await page.waitForTimeout(800);
+        const urlAfter = page.url();
+        const titleAfter = await page.title().catch(() => "");
+
+        const urlChanged = canonicalize(urlAfter) !== canonicalize(urlBefore);
+        const titleChanged = titleAfter !== titleBefore && titleAfter.trim() !== "";
+
+        if (urlChanged || titleChanged) {
+          const canonical = canonicalize(urlAfter);
+          if (!visited.has(canonical)) {
+            const result = await capturePageState(page, urlAfter, timeout);
+            if (result) results.push({ ...result, depth: 1, parentId: "entry" });
+          }
+        }
+
+        // Navigate back to entry for next iteration
+        await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6000, timeout) }).catch(() => {});
+        await page.waitForLoadState("networkidle", { timeout: 2000 }).catch(() => {});
+      } catch {
+        // continue to next target
+        await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: Math.min(6000, timeout) }).catch(() => {});
+      }
+    }
+  } finally {
+    await page.close().catch(() => {});
+  }
+
+  return results;
+}
+
+async function capturePageState(
+  page: Page,
+  url: string,
+  timeoutMs: number
+): Promise<Omit<CrawlPage, "id" | "depth" | "parentId"> | null> {
+  try {
+    const title = (await page.title()) || "(untitled)";
+    const finalUrl = page.url() || url;
+
+    // Scroll to trigger lazy loading
+    await page.evaluate(async () => {
+      await new Promise<void>((resolve) => {
+        let total = 0;
+        const timer = setInterval(() => {
+          window.scrollBy(0, 500);
+          total += 500;
+          if (total >= Math.min(document.body.scrollHeight, 4000)) {
+            clearInterval(timer);
+            window.scrollTo(0, 0);
+            resolve();
+          }
+        }, 80);
+      });
+    }).catch(() => {});
+
+    let screenshot: string | null = null;
+    try {
+      const buf = await page.screenshot({
+        type: "jpeg",
+        quality: 65,
+        fullPage: true,
+        clip: { x: 0, y: 0, width: 1280, height: Math.min(4000, 1280 * 3) },
+      });
+      screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
+    } catch {
+      try {
+        const buf = await page.screenshot({ type: "jpeg", quality: 65, fullPage: false });
+        screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
+      } catch {
+        screenshot = null;
+      }
+    }
+
+    const findings = await collectFindings(page, timeoutMs);
+
+    return { url: finalUrl, title, screenshot, findings };
+  } catch {
+    return null;
+  }
 }
 
 function canonicalize(url: string): string {
@@ -239,12 +469,38 @@ async function visit(
   const title = (await page.title()) || "(untitled)";
   const finalUrl = page.url();
 
+  // Scroll to trigger lazy loading before screenshot
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve) => {
+      let total = 0;
+      const timer = setInterval(() => {
+        window.scrollBy(0, 500);
+        total += 500;
+        if (total >= Math.min(document.body.scrollHeight, 4000)) {
+          clearInterval(timer);
+          window.scrollTo(0, 0);
+          resolve();
+        }
+      }, 80);
+    });
+  }).catch(() => {});
+
   let screenshot: string | null = null;
   try {
-    const buf = await page.screenshot({ type: "jpeg", quality: 60, fullPage: false });
+    const buf = await page.screenshot({
+      type: "jpeg",
+      quality: 65,
+      fullPage: true,
+      clip: { x: 0, y: 0, width: 1280, height: Math.min(4000, 1280 * 3) },
+    });
     screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
   } catch {
-    screenshot = null;
+    try {
+      const buf = await page.screenshot({ type: "jpeg", quality: 65, fullPage: false });
+      screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
+    } catch {
+      screenshot = null;
+    }
   }
 
   const bodyText = await page
@@ -269,9 +525,12 @@ async function visit(
     };
   }
 
+  // Improved link extraction: <a href>, [data-href], [href] on any element, router-link
   const sameOriginLinks = await page.evaluate((rootOrigin) => {
-    const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
     const out = new Set<string>();
+
+    // Standard anchors
+    const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
     for (const a of anchors) {
       try {
         const href = a.href;
@@ -284,9 +543,59 @@ async function visit(
         // skip
       }
     }
-    return Array.from(out).slice(0, 12);
+
+    // data-href on any element
+    const dataHrefEls = Array.from(document.querySelectorAll<HTMLElement>("[data-href]"));
+    for (const el of dataHrefEls) {
+      const rawHref = el.getAttribute("data-href");
+      if (!rawHref) continue;
+      try {
+        const u = new URL(rawHref, rootOrigin);
+        if (u.origin !== rootOrigin) continue;
+        if (u.pathname.match(/\.(pdf|zip|png|jpg|jpeg|svg|css|js|webp)$/i)) continue;
+        out.add(u.toString());
+      } catch {
+        // skip
+      }
+    }
+
+    // href on non-anchor elements (buttons etc.)
+    const hrefEls = Array.from(document.querySelectorAll<HTMLElement>("button[href], [role='button'][href]"));
+    for (const el of hrefEls) {
+      const rawHref = el.getAttribute("href");
+      if (!rawHref) continue;
+      try {
+        const u = new URL(rawHref, rootOrigin);
+        if (u.origin !== rootOrigin) continue;
+        out.add(u.toString());
+      } catch {
+        // skip
+      }
+    }
+
+    // router-link (Vue/Nuxt)
+    const routerLinks = Array.from(document.querySelectorAll<HTMLElement>("router-link[to], [router-link]"));
+    for (const el of routerLinks) {
+      const to = el.getAttribute("to");
+      if (!to) continue;
+      try {
+        const u = new URL(to, rootOrigin);
+        if (u.origin !== rootOrigin) continue;
+        out.add(u.toString());
+      } catch {
+        // skip
+      }
+    }
+
+    return Array.from(out).slice(0, 16);
   }, origin);
 
+  const findings = await collectFindings(page, timeoutMs);
+
+  return { finalUrl, title, screenshot, sameOriginLinks, findings };
+}
+
+async function collectFindings(page: Page, timeoutMs: number): Promise<CrawlFinding[]> {
   const findings: CrawlFinding[] = [];
 
   try {
@@ -386,11 +695,12 @@ async function visit(
     }
 
     return out;
-  });
+  }).catch(() => []);
 
   for (const h of heuristics) {
     findings.push({ ...h, line: 1 });
   }
 
-  return { finalUrl, title, screenshot, sameOriginLinks, findings };
+  void timeoutMs; // used by caller for context
+  return findings;
 }

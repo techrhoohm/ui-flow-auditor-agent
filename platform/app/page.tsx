@@ -12,19 +12,14 @@ import { FlowCanvas } from "@/components/flow/FlowCanvas";
 import { PointingLine } from "@/components/flow/PointingLine";
 import { Nora } from "@/components/nora/Nora";
 import { Sidebar } from "@/components/shell/Sidebar";
-import { Topbar, type AuditTarget } from "@/components/shell/Topbar";
+import { Topbar } from "@/components/shell/Topbar";
 import type { AuditScript } from "@/lib/audit-script";
-import { vitalsAppScript } from "@/lib/audit-script";
 import {
   useAuditRun,
   type AuditFinding,
   type AuditRunResult,
 } from "@/lib/audit-runner";
-import {
-  vitalsAppEdges,
-  vitalsAppNodes,
-  type ScreenNodeData,
-} from "@/lib/fixtures";
+import { type ScreenNodeData } from "@/lib/fixtures";
 import { useTestCaseCounts } from "@/lib/test-cases";
 import { useScriptSummaries } from "@/lib/test-scripts";
 import { startRun, useQAHistory } from "@/lib/qa-runs";
@@ -35,17 +30,19 @@ import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressi
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
-function deriveTargetKey(target: AuditTarget, urlInput: string): string {
-  if (target === "demo") return "demo";
-  if (target === "vitalsapp") return "vitalsapp";
-  if (!urlInput) return "url:pending";
-  try {
-    const trimmed = urlInput.trim();
-    const withScheme = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-    return new URL(withScheme).origin;
-  } catch {
-    return "url:invalid";
+const EMPTY_SCRIPT: AuditScript = { target: "", events: [] };
+
+function deriveTargetKey(targetInput: string): string {
+  const trimmed = targetInput.trim();
+  if (!trimmed) return "source:pending";
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      return new URL(trimmed).origin;
+    } catch {
+      return "url:invalid";
+    }
   }
+  return `source:${trimmed}`;
 }
 
 type UrlAuditResponse = {
@@ -71,22 +68,21 @@ export default function Page() {
 }
 
 function Dashboard() {
-  const [nodes, setNodes] = useState<Node<ScreenNodeData>[]>(vitalsAppNodes);
-  const [edges, setEdges] = useState<Edge[]>(vitalsAppEdges);
+  const [nodes, setNodes] = useState<Node<ScreenNodeData>[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [history, setHistory] = useState<AuditRunResult[]>([]);
   const [findingsByNode, setFindingsByNode] = useState<
     Record<string, AuditFinding[]>
   >({});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [target, setTarget] = useState<AuditTarget>("demo");
-  const [urlInput, setUrlInput] = useState("");
+  const [targetInput, setTargetInput] = useState("");
 
   const noraAnchorRef = useRef<HTMLDivElement | null>(null);
   const [noraOrigin, setNoraOrigin] = useState<{ x: number; y: number } | null>(
     null
   );
 
-  const run = useAuditRun(vitalsAppScript);
+  const run = useAuditRun(EMPTY_SCRIPT);
 
   const onNodesChange = useCallback(
     (changes: Parameters<typeof applyNodeChanges>[0]) => {
@@ -147,20 +143,6 @@ function Dashboard() {
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  // Swap the canvas to the fixture set when target changes back to demo / vitalsapp.
-  useEffect(() => {
-    if (target === "demo" || target === "vitalsapp") {
-      setNodes(
-        vitalsAppNodes.map((n) => ({
-          ...n,
-          data: { ...n.data, issueCount: 0, screenshotUrl: null },
-        }))
-      );
-      setEdges(vitalsAppEdges);
-      setHasScreenshots(false);
-    }
-  }, [target]);
-
   const resetCanvas = useCallback(() => {
     setFindingsByNode({});
     setNodes((prev) =>
@@ -208,6 +190,8 @@ function Dashboard() {
     []
   );
 
+  const [hasScreenshots, setHasScreenshots] = useState(false);
+
   const swapToDynamic = useCallback((res: UrlAuditResponse) => {
     const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
       id: n.id,
@@ -236,59 +220,56 @@ function Dashboard() {
   }, []);
 
   const handleStart = useCallback(async () => {
-    if (target === "demo") {
-      resetCanvas();
-      run.start();
+    const trimmed = targetInput.trim();
+
+    if (!trimmed) {
+      run.fail("No target specified.");
       return;
     }
 
-    if (target === "vitalsapp") {
-      resetCanvas();
-      run.prepare("Reading VitalsApp source.");
+    const isUrl = /^https?:\/\//i.test(trimmed);
+
+    if (isUrl) {
+      run.prepare(`Crawling ${truncate(trimmed, 40)}.`);
       try {
-        const res = await fetch("/api/audit/vitalsapp", { cache: "no-store" });
+        const res = await fetch("/api/audit/url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmed, maxPages: 6 }),
+        });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body?.error ?? `HTTP ${res.status}`);
+          throw new Error((body as { error?: string })?.error ?? `HTTP ${res.status}`);
         }
-        const { script } = (await res.json()) as { script: AuditScript };
-        run.start(script);
+        const data = (await res.json()) as UrlAuditResponse;
+        swapToDynamic(data);
+        const tk = deriveTargetKey(trimmed);
+        const diffItems = data.nodes.map((n) => ({ nodeId: n.id, screenshotUrl: data.screenshots[n.id] ?? null }));
+        setTimeout(() => runDiffs(tk, diffItems), 100);
+        setTimeout(() => run.start(data.script), 50);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        run.fail(`Source unreachable. ${msg}`);
+        run.fail(`Crawl failed. ${msg}`);
       }
       return;
     }
 
-    // target === "url"
-    if (!urlInput) {
-      run.fail("No URL.");
-      return;
-    }
-    run.prepare(`Crawling ${truncate(urlInput, 40)}.`);
+    // Source path — call stub
+    run.prepare(`Reading source at ${truncate(trimmed, 40)}.`);
     try {
-      const res = await fetch("/api/audit/url", {
+      const res = await fetch("/api/audit/source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlInput, maxPages: 6 }),
+        body: JSON.stringify({ path: trimmed }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error ?? `HTTP ${res.status}`);
-      }
-      const data = (await res.json()) as UrlAuditResponse;
-      swapToDynamic(data);
-      // Diff against baseline in background (non-blocking)
-      const tk = deriveTargetKey("url", urlInput);
-      const diffItems = data.nodes.map((n) => ({ nodeId: n.id, screenshotUrl: data.screenshots[n.id] ?? null }));
-      setTimeout(() => runDiffs(tk, diffItems), 100);
-      // Small tick so React commits the new nodes before the script plays.
-      setTimeout(() => run.start(data.script), 50);
+      const body = await res.json().catch(() => ({}));
+      const errMsg = (body as { error?: string })?.error ?? `HTTP ${res.status}`;
+      run.fail(errMsg);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      run.fail(`Crawl failed. ${msg}`);
+      run.fail(`Source audit failed. ${msg}`);
     }
-  }, [resetCanvas, run, runDiffs, swapToDynamic, target, urlInput]);
+  }, [run, runDiffs, swapToDynamic, targetInput]);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null),
@@ -296,15 +277,14 @@ function Dashboard() {
   );
 
   const targetKey = useMemo(
-    () => deriveTargetKey(target, urlInput),
-    [target, urlInput]
+    () => deriveTargetKey(targetInput),
+    [targetInput]
   );
   const testCaseCounts = useTestCaseCounts(targetKey);
   const scriptSummaries = useScriptSummaries(targetKey);
   const qaHistory = useQAHistory(targetKey);
   const [qaRunId, setQaRunId] = useState<string | null>(null);
   const { model, setModel } = useAIModel();
-  const [hasScreenshots, setHasScreenshots] = useState(false);
   const regressions = useRegressions(targetKey);
 
   const totalCaseCount = useMemo(
@@ -318,16 +298,16 @@ function Dashboard() {
   );
 
   const targetLabel = useMemo(() => {
-    if (target === "demo") return "Demo (scripted)";
-    if (target === "vitalsapp") return "VitalsApp";
+    const trimmed = targetInput.trim();
+    if (!trimmed) return "No target";
     return targetKey.replace(/^https?:\/\//, "");
-  }, [target, targetKey]);
+  }, [targetInput, targetKey]);
 
   const handleStartQA = useCallback(() => {
     const seeded = buildStartRunResults(targetKey, nodeMetas);
     if (seeded.length === 0) return;
-    const run = startRun(targetKey, seeded);
-    setQaRunId(run.id);
+    const qaRun = startRun(targetKey, seeded);
+    setQaRunId(qaRun.id);
   }, [targetKey, nodeMetas]);
 
   const handleResumeQA = useCallback((id: string) => {
@@ -339,7 +319,7 @@ function Dashboard() {
       for (const n of prev) {
         if (n.data.screenshotUrl) saveBaseline(targetKey, n.id, n.data.screenshotUrl);
       }
-      return prev; // no state change — just side-effect
+      return prev;
     });
   }, [targetKey]);
 
@@ -377,15 +357,16 @@ function Dashboard() {
     );
   }, [testCaseCounts, scriptSummaries, regressions]);
 
+  // Suppress resetCanvas warning — only needed if nodes exist
+  void resetCanvas;
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
       <Topbar
         running={run.running}
-        target={target}
-        url={urlInput}
+        targetInput={targetInput}
         model={model}
-        onTargetChange={setTarget}
-        onUrlChange={setUrlInput}
+        onTargetChange={setTargetInput}
         onModelChange={setModel}
         onStart={handleStart}
         onStop={run.stop}
