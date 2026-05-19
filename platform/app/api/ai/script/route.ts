@@ -10,12 +10,12 @@ type Body = {
   model?: string;
 };
 
-const client = new Anthropic();
-
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.my_claude;
+  if (!apiKey) {
     return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 503 });
   }
+  const client = new Anthropic({ apiKey });
 
   const body = (await req.json()) as Body;
   const { description, nodeLabel, nodeUrl, model = "claude-sonnet-4-6" } = body;
