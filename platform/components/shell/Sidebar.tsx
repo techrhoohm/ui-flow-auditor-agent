@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { AuditRunResult } from "@/lib/audit-runner";
 import { summarize, type QARun } from "@/lib/qa-runs";
+import { getBaselineMeta, BASELINES_EVENT, type BaselineMeta } from "@/lib/baselines";
 
 type Props = {
   running: boolean;
@@ -9,8 +11,12 @@ type Props = {
   history: AuditRunResult[];
   qaRuns: QARun[];
   qaCaseCount: number;
+  targetKey: string;
+  hasScreenshots: boolean;
   onStartQA: () => void;
   onResumeQA: (id: string) => void;
+  onSetBaseline: () => void;
+  onClearBaseline: () => void;
 };
 
 const formatTime = (ms: number) => {
@@ -29,11 +35,27 @@ export function Sidebar({
   history,
   qaRuns,
   qaCaseCount,
+  targetKey,
+  hasScreenshots,
   onStartQA,
   onResumeQA,
+  onSetBaseline,
+  onClearBaseline,
 }: Props) {
   const pct =
     progress.total > 0 ? Math.round((progress.index / progress.total) * 100) : 0;
+
+  const [baselineMeta, setBaselineMeta] = useState<BaselineMeta>({ count: 0, savedAt: null });
+  useEffect(() => {
+    const refresh = () => setBaselineMeta(getBaselineMeta(targetKey));
+    refresh();
+    window.addEventListener(BASELINES_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(BASELINES_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [targetKey]);
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950/50">
@@ -124,6 +146,47 @@ export function Sidebar({
               );
             })}
           </ul>
+        )}
+      </div>
+
+      <div className="border-b border-zinc-800 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Visual baseline
+          </div>
+          <div className="flex items-center gap-1.5">
+            {baselineMeta.count > 0 && (
+              <button
+                type="button"
+                onClick={onClearBaseline}
+                className="text-[9px] text-zinc-600 hover:text-rose-300"
+                title="Clear baseline"
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onSetBaseline}
+              disabled={!hasScreenshots || running}
+              title={!hasScreenshots ? "Run a URL audit first to capture screenshots" : "Save current screenshots as baseline"}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] font-medium text-zinc-200 hover:enabled:border-violet-400/40 hover:enabled:text-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Set
+            </button>
+          </div>
+        </div>
+        {baselineMeta.count > 0 ? (
+          <p className="mt-1.5 text-[11px] text-zinc-400">
+            {baselineMeta.count} screen{baselineMeta.count === 1 ? "" : "s"} ·{" "}
+            <span className="text-zinc-500">
+              {baselineMeta.savedAt ? new Date(baselineMeta.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+            </span>
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-zinc-500">
+            {hasScreenshots ? "No baseline set. Click Set to save current screenshots." : "Run a URL audit to capture screenshots first."}
+          </p>
         )}
       </div>
 

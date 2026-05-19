@@ -96,6 +96,7 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <RegressionBadge pct={typeof data.regressionPct === "number" ? data.regressionPct : null} />
             <ScriptBadge summary={data.scriptSummary} />
             {data.testCaseCount && data.testCaseCount > 0 ? (
               <span
@@ -116,6 +117,27 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
         />
       </div>
     </div>
+  );
+}
+
+function RegressionBadge({ pct }: { pct: number | null }) {
+  if (pct === null || pct < 1) return null;
+  const isHigh = pct >= 5;
+  const cls = isHigh
+    ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+    : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  const label = `Δ${pct.toFixed(0)}%`;
+  return (
+    <motion.span
+      key={pct}
+      initial={{ scale: 1.3 }}
+      animate={{ scale: 1 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      title={`Visual regression: ~${pct.toFixed(1)}% pixels changed`}
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] font-mono ${cls}`}
+    >
+      {label}
+    </motion.span>
   );
 }
 

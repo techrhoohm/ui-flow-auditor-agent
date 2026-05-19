@@ -30,6 +30,8 @@ import { useScriptSummaries } from "@/lib/test-scripts";
 import { startRun, useQAHistory } from "@/lib/qa-runs";
 import { QARunModal, buildStartRunResults } from "@/components/qa/QARunModal";
 import { useAIModel } from "@/lib/ai-model";
+import { saveBaseline, clearBaselines, getBaseline } from "@/lib/baselines";
+import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressions";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -155,6 +157,7 @@ function Dashboard() {
         }))
       );
       setEdges(vitalsAppEdges);
+      setHasScreenshots(false);
     }
   }, [target]);
 
@@ -172,6 +175,38 @@ function Dashboard() {
       }))
     );
   }, []);
+
+  const runDiffs = useCallback(
+    async (tk: string, items: Array<{ nodeId: string; screenshotUrl: string | null }>) => {
+      for (const { nodeId, screenshotUrl } of items) {
+        if (!screenshotUrl) continue;
+        const baseline = getBaseline(tk, nodeId);
+        if (!baseline) continue;
+        try {
+          const res = await fetch("/api/diff", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ baseline: baseline.dataUrl, current: screenshotUrl }),
+          });
+          if (!res.ok) continue;
+          const data = await res.json() as {
+            percentChanged: number; changedPixels: number; totalPixels: number; diffDataUrl: string;
+          };
+          saveRegression(tk, nodeId, {
+            percentChanged: data.percentChanged,
+            changedPixels: data.changedPixels,
+            totalPixels: data.totalPixels,
+            diffDataUrl: data.diffDataUrl,
+            baselineSavedAt: baseline.savedAt,
+            checkedAt: Date.now(),
+          });
+        } catch {
+          // non-blocking — skip failed diffs
+        }
+      }
+    },
+    []
+  );
 
   const swapToDynamic = useCallback((res: UrlAuditResponse) => {
     const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
@@ -197,6 +232,7 @@ function Dashboard() {
     setNodes(dynamicNodes);
     setEdges(dynamicEdges);
     setFindingsByNode({});
+    setHasScreenshots(res.nodes.some((n) => !!res.screenshots[n.id]));
   }, []);
 
   const handleStart = useCallback(async () => {
@@ -242,13 +278,17 @@ function Dashboard() {
       }
       const data = (await res.json()) as UrlAuditResponse;
       swapToDynamic(data);
+      // Diff against baseline in background (non-blocking)
+      const tk = deriveTargetKey("url", urlInput);
+      const diffItems = data.nodes.map((n) => ({ nodeId: n.id, screenshotUrl: data.screenshots[n.id] ?? null }));
+      setTimeout(() => runDiffs(tk, diffItems), 100);
       // Small tick so React commits the new nodes before the script plays.
       setTimeout(() => run.start(data.script), 50);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       run.fail(`Crawl failed. ${msg}`);
     }
-  }, [resetCanvas, run, swapToDynamic, target, urlInput]);
+  }, [resetCanvas, run, runDiffs, swapToDynamic, target, urlInput]);
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null),
@@ -264,6 +304,8 @@ function Dashboard() {
   const qaHistory = useQAHistory(targetKey);
   const [qaRunId, setQaRunId] = useState<string | null>(null);
   const { model, setModel } = useAIModel();
+  const [hasScreenshots, setHasScreenshots] = useState(false);
+  const regressions = useRegressions(targetKey);
 
   const totalCaseCount = useMemo(
     () => Object.values(testCaseCounts).reduce((a, b) => a + b, 0),
@@ -292,6 +334,20 @@ function Dashboard() {
     setQaRunId(id);
   }, []);
 
+  const handleSetBaseline = useCallback(() => {
+    setNodes((prev) => {
+      for (const n of prev) {
+        if (n.data.screenshotUrl) saveBaseline(targetKey, n.id, n.data.screenshotUrl);
+      }
+      return prev; // no state change — just side-effect
+    });
+  }, [targetKey]);
+
+  const handleClearBaseline = useCallback(() => {
+    clearBaselines(targetKey);
+    clearRegressions(targetKey);
+  }, [targetKey]);
+
   const activeQARun = useMemo(
     () => (qaRunId ? qaHistory.find((r) => r.id === qaRunId) ?? null : null),
     [qaRunId, qaHistory]
@@ -302,9 +358,11 @@ function Dashboard() {
       prev.map((n) => {
         const tcCount = testCaseCounts[n.id] ?? 0;
         const summary = scriptSummaries[n.id];
+        const regressionPct = regressions[n.id]?.percentChanged ?? null;
         const same =
           n.data.testCaseCount === tcCount &&
-          shallowEqualSummary(n.data.scriptSummary, summary);
+          shallowEqualSummary(n.data.scriptSummary, summary) &&
+          n.data.regressionPct === regressionPct;
         if (same) return n;
         return {
           ...n,
@@ -312,11 +370,12 @@ function Dashboard() {
             ...n.data,
             testCaseCount: tcCount,
             scriptSummary: summary,
+            regressionPct,
           },
         };
       })
     );
-  }, [testCaseCounts, scriptSummaries]);
+  }, [testCaseCounts, scriptSummaries, regressions]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
@@ -339,8 +398,12 @@ function Dashboard() {
           history={history}
           qaRuns={qaHistory}
           qaCaseCount={totalCaseCount}
+          targetKey={targetKey}
+          hasScreenshots={hasScreenshots}
           onStartQA={handleStartQA}
           onResumeQA={handleResumeQA}
+          onSetBaseline={handleSetBaseline}
+          onClearBaseline={handleClearBaseline}
         />
 
         <main className="relative flex-1 overflow-hidden">
