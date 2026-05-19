@@ -27,6 +27,8 @@ import {
 } from "@/lib/fixtures";
 import { useTestCaseCounts } from "@/lib/test-cases";
 import { useScriptSummaries } from "@/lib/test-scripts";
+import { startRun, useQAHistory } from "@/lib/qa-runs";
+import { QARunModal, buildStartRunResults } from "@/components/qa/QARunModal";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -258,6 +260,40 @@ function Dashboard() {
   );
   const testCaseCounts = useTestCaseCounts(targetKey);
   const scriptSummaries = useScriptSummaries(targetKey);
+  const qaHistory = useQAHistory(targetKey);
+  const [qaRunId, setQaRunId] = useState<string | null>(null);
+
+  const totalCaseCount = useMemo(
+    () => Object.values(testCaseCounts).reduce((a, b) => a + b, 0),
+    [testCaseCounts]
+  );
+
+  const nodeMetas = useMemo(
+    () => nodes.map((n) => ({ id: n.id, label: n.data.label })),
+    [nodes]
+  );
+
+  const targetLabel = useMemo(() => {
+    if (target === "demo") return "Demo (scripted)";
+    if (target === "vitalsapp") return "VitalsApp";
+    return targetKey.replace(/^https?:\/\//, "");
+  }, [target, targetKey]);
+
+  const handleStartQA = useCallback(() => {
+    const seeded = buildStartRunResults(targetKey, nodeMetas);
+    if (seeded.length === 0) return;
+    const run = startRun(targetKey, seeded);
+    setQaRunId(run.id);
+  }, [targetKey, nodeMetas]);
+
+  const handleResumeQA = useCallback((id: string) => {
+    setQaRunId(id);
+  }, []);
+
+  const activeQARun = useMemo(
+    () => (qaRunId ? qaHistory.find((r) => r.id === qaRunId) ?? null : null),
+    [qaRunId, qaHistory]
+  );
 
   useEffect(() => {
     setNodes((prev) =>
@@ -297,6 +333,10 @@ function Dashboard() {
           running={run.running}
           progress={run.progress}
           history={history}
+          qaRuns={qaHistory}
+          qaCaseCount={totalCaseCount}
+          onStartQA={handleStartQA}
+          onResumeQA={handleResumeQA}
         />
 
         <main className="relative flex-1 overflow-hidden">
@@ -328,6 +368,15 @@ function Dashboard() {
           />
         </main>
       </div>
+
+      <QARunModal
+        open={!!qaRunId && !!activeQARun}
+        run={activeQARun}
+        targetKey={targetKey}
+        targetLabel={targetLabel}
+        nodes={nodeMetas}
+        onClose={() => setQaRunId(null)}
+      />
     </div>
   );
 }

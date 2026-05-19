@@ -1,11 +1,16 @@
 "use client";
 
 import type { AuditRunResult } from "@/lib/audit-runner";
+import { summarize, type QARun } from "@/lib/qa-runs";
 
 type Props = {
   running: boolean;
   progress: { index: number; total: number };
   history: AuditRunResult[];
+  qaRuns: QARun[];
+  qaCaseCount: number;
+  onStartQA: () => void;
+  onResumeQA: (id: string) => void;
 };
 
 const formatTime = (ms: number) => {
@@ -18,15 +23,23 @@ const formatDuration = (start: number, end: number) => {
   return `${s}s`;
 };
 
-export function Sidebar({ running, progress, history }: Props) {
+export function Sidebar({
+  running,
+  progress,
+  history,
+  qaRuns,
+  qaCaseCount,
+  onStartQA,
+  onResumeQA,
+}: Props) {
   const pct =
     progress.total > 0 ? Math.round((progress.index / progress.total) * 100) : 0;
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950/50">
+    <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950/50">
       <div className="border-b border-zinc-800 px-4 py-3">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-          Run
+          Audit
         </div>
         {running ? (
           <>
@@ -48,13 +61,79 @@ export function Sidebar({ running, progress, history }: Props) {
         )}
       </div>
 
+      <div className="border-b border-zinc-800 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Manual QA
+          </div>
+          <button
+            type="button"
+            onClick={onStartQA}
+            disabled={qaCaseCount === 0}
+            title={
+              qaCaseCount === 0
+                ? "Add test cases on any node first"
+                : `Run ${qaCaseCount} test case${qaCaseCount === 1 ? "" : "s"}`
+            }
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] font-medium text-zinc-200 hover:enabled:border-violet-400/40 hover:enabled:text-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Start
+          </button>
+        </div>
+        {qaRuns.length === 0 ? (
+          <p className="mt-1.5 text-[11px] text-zinc-500">
+            {qaCaseCount === 0
+              ? "Author test cases first."
+              : "No QA runs yet."}
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {qaRuns.slice(0, 4).map((r) => {
+              const s = summarize(r);
+              return (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => onResumeQA(r.id)}
+                    className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-left transition-colors hover:border-zinc-600"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] text-zinc-500">
+                        {formatTime(r.startedAt)}
+                      </span>
+                      {r.completedAt ? (
+                        <span className="font-mono text-[9px] text-zinc-600">
+                          done
+                        </span>
+                      ) : (
+                        <span className="font-mono text-[9px] text-violet-300">
+                          in-progress
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-400">
+                      <span className="text-emerald-300">{s.pass}p</span>
+                      <span className="text-rose-300">{s.fail}f</span>
+                      <span className="text-amber-200">{s.blocked}b</span>
+                      <span className="ml-auto text-zinc-500">
+                        {s.evaluated}/{s.total}
+                      </span>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto px-4 py-3">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
           History
         </div>
         {history.length === 0 ? (
           <p className="mt-2 text-[12px] leading-relaxed text-zinc-500">
-            No completed runs yet.
+            No completed audits yet.
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
@@ -66,8 +145,10 @@ export function Sidebar({ running, progress, history }: Props) {
                   className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-zinc-200">{r.target}</span>
-                    <span className="font-mono text-[10px] text-zinc-500">
+                    <span className="truncate text-[12px] text-zinc-200">
+                      {r.target}
+                    </span>
+                    <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
                       {formatTime(r.startedAt)}
                     </span>
                   </div>
