@@ -25,8 +25,22 @@ import {
   vitalsAppNodes,
   type ScreenNodeData,
 } from "@/lib/fixtures";
+import { useTestCaseCounts } from "@/lib/test-cases";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
+
+function deriveTargetKey(target: AuditTarget, urlInput: string): string {
+  if (target === "demo") return "demo";
+  if (target === "vitalsapp") return "vitalsapp";
+  if (!urlInput) return "url:pending";
+  try {
+    const trimmed = urlInput.trim();
+    const withScheme = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    return new URL(withScheme).origin;
+  } catch {
+    return "url:invalid";
+  }
+}
 
 type UrlAuditResponse = {
   script: AuditScript;
@@ -235,6 +249,22 @@ function Dashboard() {
     [selectedNodeId, nodes]
   );
 
+  const targetKey = useMemo(
+    () => deriveTargetKey(target, urlInput),
+    [target, urlInput]
+  );
+  const testCaseCounts = useTestCaseCounts(targetKey);
+
+  useEffect(() => {
+    setNodes((prev) =>
+      prev.map((n) => {
+        const tcCount = testCaseCounts[n.id] ?? 0;
+        if (n.data.testCaseCount === tcCount) return n;
+        return { ...n, data: { ...n.data, testCaseCount: tcCount } };
+      })
+    );
+  }, [testCaseCounts]);
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
       <Topbar
@@ -278,6 +308,7 @@ function Dashboard() {
             nodeId={selectedNodeId}
             data={selectedNode?.data ?? null}
             findings={selectedNodeId ? findingsByNode[selectedNodeId] ?? [] : []}
+            targetKey={targetKey}
             onClose={() => setSelectedNodeId(null)}
           />
         </main>

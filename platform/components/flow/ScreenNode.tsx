@@ -95,7 +95,17 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
               {data.label}
             </div>
           </div>
-          <IssueBadge count={data.issueCount} />
+          <div className="flex items-center gap-1">
+            {data.testCaseCount && data.testCaseCount > 0 ? (
+              <span
+                title={`${data.testCaseCount} test case${data.testCaseCount === 1 ? "" : "s"}`}
+                className="rounded-full border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-mono text-violet-300"
+              >
+                TC {data.testCaseCount}
+              </span>
+            ) : null}
+            <IssueBadge count={data.issueCount} />
+          </div>
         </div>
 
         <Handle
