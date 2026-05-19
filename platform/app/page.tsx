@@ -26,6 +26,7 @@ import {
   type ScreenNodeData,
 } from "@/lib/fixtures";
 import { useTestCaseCounts } from "@/lib/test-cases";
+import { useScriptSummaries } from "@/lib/test-scripts";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -50,6 +51,7 @@ type UrlAuditResponse = {
     kind: ScreenNodeData["kind"];
     position: { x: number; y: number };
     hasScreenshot: boolean;
+    url: string;
   }>;
   edges: Array<{ source: string; target: string }>;
   screenshots: Record<string, string>;
@@ -179,6 +181,7 @@ function Dashboard() {
         issueCount: 0,
         thumbnailSeed: n.id,
         screenshotUrl: res.screenshots[n.id] ?? null,
+        nodeUrl: n.url,
         isActive: false,
         flashSeverity: null,
       },
@@ -254,16 +257,28 @@ function Dashboard() {
     [target, urlInput]
   );
   const testCaseCounts = useTestCaseCounts(targetKey);
+  const scriptSummaries = useScriptSummaries(targetKey);
 
   useEffect(() => {
     setNodes((prev) =>
       prev.map((n) => {
         const tcCount = testCaseCounts[n.id] ?? 0;
-        if (n.data.testCaseCount === tcCount) return n;
-        return { ...n, data: { ...n.data, testCaseCount: tcCount } };
+        const summary = scriptSummaries[n.id];
+        const same =
+          n.data.testCaseCount === tcCount &&
+          shallowEqualSummary(n.data.scriptSummary, summary);
+        if (same) return n;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            testCaseCount: tcCount,
+            scriptSummary: summary,
+          },
+        };
       })
     );
-  }, [testCaseCounts]);
+  }, [testCaseCounts, scriptSummaries]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#08080a] text-zinc-100">
@@ -319,4 +334,18 @@ function Dashboard() {
 
 function truncate(s: string, n: number) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function shallowEqualSummary(
+  a: ScreenNodeData["scriptSummary"],
+  b: ScreenNodeData["scriptSummary"]
+) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.pass === b.pass &&
+    a.fail === b.fail &&
+    a.error === b.error &&
+    a.total === b.total
+  );
 }

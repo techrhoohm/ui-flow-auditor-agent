@@ -8,7 +8,14 @@ export type ScreenNodeData = {
   issueCount: number;
   thumbnailSeed: string;
   screenshotUrl?: string | null;
+  nodeUrl?: string | null;
   testCaseCount?: number;
+  scriptSummary?: {
+    pass: number;
+    fail: number;
+    error: number;
+    total: number;
+  };
   isActive?: boolean;
   flashSeverity?: Severity | null;
   [key: string]: unknown;

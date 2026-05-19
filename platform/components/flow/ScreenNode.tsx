@@ -96,6 +96,7 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <ScriptBadge summary={data.scriptSummary} />
             {data.testCaseCount && data.testCaseCount > 0 ? (
               <span
                 title={`${data.testCaseCount} test case${data.testCaseCount === 1 ? "" : "s"}`}
@@ -115,6 +116,40 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
         />
       </div>
     </div>
+  );
+}
+
+function ScriptBadge({
+  summary,
+}: {
+  summary?: ScreenNodeData["scriptSummary"];
+}) {
+  if (!summary || summary.total === 0) return null;
+  const ranAny = summary.pass + summary.fail + summary.error > 0;
+  if (!ranAny) {
+    return (
+      <span
+        title={`${summary.total} script${summary.total === 1 ? "" : "s"} authored, none run yet`}
+        className="rounded-full border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400"
+      >
+        S 0/{summary.total}
+      </span>
+    );
+  }
+  const allPass = summary.pass === summary.total;
+  const anyFail = summary.fail > 0 || summary.error > 0;
+  const cls = allPass
+    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+    : anyFail
+    ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+    : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  return (
+    <span
+      title={`${summary.pass} pass · ${summary.fail} fail · ${summary.error} error of ${summary.total}`}
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] font-mono ${cls}`}
+    >
+      S {summary.pass}/{summary.total}
+    </span>
   );
 }
 

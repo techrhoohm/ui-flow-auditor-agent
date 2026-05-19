@@ -70,6 +70,7 @@ type ResponseNode = {
   kind: "entry" | "tab" | "detail";
   position: { x: number; y: number };
   hasScreenshot: boolean;
+  url: string;
 };
 
 function buildResponse(crawl: CrawlResult): {
@@ -90,6 +91,7 @@ function buildResponse(crawl: CrawlResult): {
       kind: p.id === "entry" ? "entry" : p.depth === 1 ? "tab" : "detail",
       position: positions[p.id] ?? { x: 0, y: 0 },
       hasScreenshot: !!p.screenshot,
+      url: p.url,
     };
   });
 

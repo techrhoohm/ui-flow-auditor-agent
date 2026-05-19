@@ -7,6 +7,8 @@ import type { AuditFinding } from "@/lib/audit-runner";
 import type { ScreenNodeData } from "@/lib/fixtures";
 import { MockScreen } from "@/lib/mock-screens";
 import { useTestCases } from "@/lib/test-cases";
+import { useScripts } from "@/lib/test-scripts";
+import { ScriptsTab } from "./ScriptsTab";
 import { TestCasesTab } from "./TestCasesTab";
 
 type Tab = "findings" | "tests" | "scripts";
@@ -56,6 +58,7 @@ export function DetailPanel({
   const [tab, setTab] = useState<Tab>("findings");
 
   const testCases = useTestCases(targetKey, nodeId);
+  const scripts = useScripts(targetKey, nodeId);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -126,8 +129,7 @@ export function DetailPanel({
               active={tab === "scripts"}
               onClick={() => setTab("scripts")}
               label="Scripts"
-              disabled
-              tooltip="Wired in Milestone 7"
+              count={scripts.length}
             />
           </div>
 
@@ -138,7 +140,13 @@ export function DetailPanel({
             {tab === "tests" && (
               <TestCasesTab targetKey={targetKey} nodeId={nodeId} />
             )}
-            {tab === "scripts" && <ScriptsPlaceholder />}
+            {tab === "scripts" && (
+              <ScriptsTab
+                targetKey={targetKey}
+                nodeId={nodeId}
+                nodeUrl={data.nodeUrl ?? null}
+              />
+            )}
           </div>
         </motion.aside>
       )}
@@ -277,22 +285,6 @@ function FindingsTab({
           </ul>
         )}
       </div>
-    </div>
-  );
-}
-
-function ScriptsPlaceholder() {
-  return (
-    <div className="px-5 py-6">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-        Scripts
-      </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-zinc-500">
-        Per-node Playwright scripts run from{" "}
-        <code className="font-mono text-zinc-300">/scripts/&lt;target&gt;/&lt;node&gt;.ts</code>
-        . This tab will host the editor, run-now button, and pass/fail badge in
-        Milestone 7.
-      </p>
     </div>
   );
 }
