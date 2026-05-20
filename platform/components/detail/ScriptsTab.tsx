@@ -15,6 +15,7 @@ import {
   type TestScript,
 } from "@/lib/test-scripts";
 import { parseScriptFile } from "@/lib/import-parsers";
+import { TemplatePicker } from "@/components/detail/TemplatePicker";
 
 type Props = {
   targetKey: string;
@@ -50,6 +51,7 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
   const [noraGenerating, setNoraGenerating] = useState(false);
   const [noraError, setNoraError] = useState<string | null>(null);
   const [showNoraInput, setShowNoraInput] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
 
   const canRun = !!nodeUrl;
 
@@ -165,8 +167,29 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
     }
   };
 
+  const handlePickerAdd = async (items: { name: string; body: string }[]) => {
+    let count = 0;
+    for (const item of items) {
+      if (item.name.trim() && item.body.trim()) {
+        await importScript(targetKey, nodeId, item.name, item.body);
+        count++;
+      }
+    }
+    if (count > 0) {
+      setImportMsg({ text: `Added ${count} script${count === 1 ? "" : "s"} from templates`, ok: true });
+      setTimeout(() => setImportMsg(null), 3500);
+    }
+  };
+
   return (
     <div className="px-5 pb-6">
+      {showPicker && (
+        <TemplatePicker
+          mode="scripts"
+          onAdd={handlePickerAdd}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -203,6 +226,14 @@ export function ScriptsTab({ targetKey, nodeId, nodeUrl, nodeLabel, model }: Pro
               className="rounded-md border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-300 transition-colors hover:bg-violet-500/20"
             >
               ✦ Ask Nora
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPicker(true)}
+              title="Browse and add from the built-in script template library"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              Templates
             </button>
             <button
               type="button"

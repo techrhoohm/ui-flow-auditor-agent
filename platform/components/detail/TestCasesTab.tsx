@@ -17,6 +17,7 @@ import {
   parseJsonTestCases,
   parseMdTestCases,
 } from "@/lib/import-parsers";
+import { TemplatePicker } from "@/components/detail/TemplatePicker";
 
 type AuditFinding = { message: string; severity: string };
 
@@ -71,6 +72,7 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
   const [suggestions, setSuggestions] = useState<SuggestedCase[]>([]);
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
+  const [showPicker, setShowPicker] = useState(false);
 
   const askNora = async () => {
     setSuggesting(true);
@@ -163,8 +165,24 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
     }
   };
 
+  const handlePickerAdd = async (
+    items: { title: string; body: string; priority: Priority; type: TestType }[]
+  ) => {
+    if (items.length === 0) return;
+    const count = await importTestCases(targetKey, nodeId, items);
+    setImportMsg({ text: `Added ${count} template${count === 1 ? "" : "s"}`, ok: true });
+    setTimeout(() => setImportMsg(null), 3500);
+  };
+
   return (
     <div className="px-5 pb-6">
+      {showPicker && (
+        <TemplatePicker
+          mode="cases"
+          onAdd={handlePickerAdd}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -192,6 +210,14 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
               className="rounded-md border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-300 transition-colors hover:bg-violet-500/20 disabled:cursor-wait disabled:opacity-50"
             >
               {suggesting ? "Asking…" : "✦ Ask Nora"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPicker(true)}
+              title="Browse and add from the built-in template library"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-violet-400/40 hover:text-violet-200"
+            >
+              Templates
             </button>
             <button
               type="button"
