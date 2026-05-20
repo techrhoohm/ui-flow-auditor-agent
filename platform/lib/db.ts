@@ -1,7 +1,7 @@
 "use client";
 
 const DB_NAME = "uifa";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export type StoreName =
   | "baselines"
@@ -9,7 +9,9 @@ export type StoreName =
   | "test-cases"
   | "test-scripts"
   | "test-script-results"
-  | "qa-runs";
+  | "qa-runs"
+  | "canvas-session"
+  | "audit-history";
 
 const ALL_STORES: StoreName[] = [
   "baselines",
@@ -18,6 +20,8 @@ const ALL_STORES: StoreName[] = [
   "test-scripts",
   "test-script-results",
   "qa-runs",
+  "canvas-session",
+  "audit-history",
 ];
 
 let _db: IDBDatabase | null = null;

@@ -28,6 +28,8 @@ import { useAIModel } from "@/lib/ai-model";
 import { saveBaseline, clearBaselines, getBaseline } from "@/lib/baselines";
 import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressions";
 import { ExportModal } from "@/components/export/ExportModal";
+import { saveCanvasSession, loadCanvasSession } from "@/lib/canvas-session";
+import { saveAuditHistory, loadAuditHistory } from "@/lib/audit-history";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -194,6 +196,39 @@ function Dashboard() {
 
   const [hasScreenshots, setHasScreenshots] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [sessionRestored, setSessionRestored] = useState(false);
+
+  // Restore canvas + history from IndexedDB on first load
+  useEffect(() => {
+    void Promise.all([loadCanvasSession(), loadAuditHistory()]).then(
+      ([session, savedHistory]) => {
+        if (session && session.nodes.length > 0) {
+          setNodes(session.nodes);
+          setEdges(session.edges);
+          setFindingsByNode(session.findingsByNode);
+          setHasScreenshots(session.hasScreenshots);
+          setTargetInput(session.targetInput);
+        }
+        if (savedHistory.length > 0) {
+          setHistory(savedHistory);
+        }
+        setSessionRestored(true);
+      }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist canvas state whenever nodes/edges/findings change (after restore)
+  useEffect(() => {
+    if (!sessionRestored || nodes.length === 0) return;
+    void saveCanvasSession({ targetInput, nodes, edges, findingsByNode, hasScreenshots });
+  }, [sessionRestored, targetInput, nodes, edges, findingsByNode, hasScreenshots]);
+
+  // Persist audit run history whenever it changes
+  useEffect(() => {
+    if (!sessionRestored || history.length === 0) return;
+    void saveAuditHistory(history);
+  }, [sessionRestored, history]);
 
   const swapToDynamic = useCallback((res: UrlAuditResponse) => {
     const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
