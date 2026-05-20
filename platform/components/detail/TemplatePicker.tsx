@@ -365,11 +365,12 @@ export function TemplatePicker(props: Props) {
                           ? "border-zinc-700 bg-zinc-900/80"
                           : "border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700"
                       }`}
+                      onClick={() => focusTemplate(t.id)}
                     >
                       {/* Checkbox */}
                       <button
                         type="button"
-                        onClick={() => toggle(t.id)}
+                        onClick={(e) => { e.stopPropagation(); toggle(t.id); }}
                         className="mt-0.5 shrink-0"
                         aria-label={isChecked ? "Deselect template" : "Select template"}
                       >
@@ -396,7 +397,7 @@ export function TemplatePicker(props: Props) {
                       </button>
 
                       {/* Content */}
-                      <div className="min-w-0 flex-1" onClick={() => focusTemplate(t.id)}>
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-1">
                           <p
                             className={`text-[12px] font-medium leading-snug ${
@@ -457,7 +458,7 @@ export function TemplatePicker(props: Props) {
 
           {/* Edit panel */}
           <div className="flex w-80 shrink-0 flex-col">
-            <AnimatePresence mode="wait">
+            <AnimatePresence>
               {focused && draft ? (
                 <motion.div
                   key={focused.id}
