@@ -17,6 +17,7 @@ type Props = {
   onResumeQA: (id: string) => void;
   onSetBaseline: () => void;
   onClearBaseline: () => void;
+  onRestoreSession: (runId: string) => void;
 };
 
 const formatTime = (ms: number) => {
@@ -41,6 +42,7 @@ export function Sidebar({
   onResumeQA,
   onSetBaseline,
   onClearBaseline,
+  onRestoreSession,
 }: Props) {
   const pct =
     progress.total > 0 ? Math.round((progress.index / progress.total) * 100) : 0;
@@ -203,29 +205,33 @@ export function Sidebar({
             {history.map((r) => {
               const high = r.findings.filter((f) => f.severity === "high").length;
               return (
-                <li
-                  key={r.id}
-                  className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="truncate text-[12px] text-zinc-200">
-                      {r.target}
-                    </span>
-                    <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
-                      {formatTime(r.startedAt)}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
-                    <span>{r.findings.length} findings</span>
-                    {high > 0 && (
-                      <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 text-[10px] text-rose-300">
-                        {high} high
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => onRestoreSession(r.id)}
+                    className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-left transition-colors hover:border-violet-500/40 hover:bg-zinc-800/60"
+                    title="Click to restore this audit session"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="truncate text-[12px] text-zinc-200">
+                        {r.target}
                       </span>
-                    )}
-                    <span className="ml-auto font-mono">
-                      {formatDuration(r.startedAt, r.endedAt)}
-                    </span>
-                  </div>
+                      <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
+                        {formatTime(r.startedAt)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
+                      <span>{r.findings.length} findings</span>
+                      {high > 0 && (
+                        <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 text-[10px] text-rose-300">
+                          {high} high
+                        </span>
+                      )}
+                      <span className="ml-auto font-mono">
+                        {formatDuration(r.startedAt, r.endedAt)}
+                      </span>
+                    </div>
+                  </button>
                 </li>
               );
             })}

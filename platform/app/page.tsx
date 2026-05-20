@@ -28,7 +28,7 @@ import { useAIModel } from "@/lib/ai-model";
 import { saveBaseline, clearBaselines, getBaseline } from "@/lib/baselines";
 import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressions";
 import { ExportModal } from "@/components/export/ExportModal";
-import { saveCanvasSession, loadCanvasSession } from "@/lib/canvas-session";
+import { saveCanvasSession, loadCanvasSession, saveNamedSession, loadNamedSession } from "@/lib/canvas-session";
 import { saveAuditHistory, loadAuditHistory } from "@/lib/audit-history";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
@@ -86,6 +86,9 @@ function Dashboard() {
     null
   );
 
+  // Always-fresh ref so onComplete snapshot captures current canvas state
+  const latestCanvasRef = useRef({ nodes, edges, targetInput, findingsByNode, hasScreenshots: false });
+
   const run = useAuditRun(EMPTY_SCRIPT);
 
   const onNodesChange = useCallback(
@@ -127,7 +130,8 @@ function Dashboard() {
 
   useEffect(() => {
     const unsub = run.onComplete((r) => {
-      setHistory((h) => [r, ...h].slice(0, 12));
+      setHistory((h) => [r, ...h].slice(0, 20));
+      void saveNamedSession(r.id, latestCanvasRef.current);
     });
     return unsub;
   }, [run]);
@@ -197,6 +201,11 @@ function Dashboard() {
   const [hasScreenshots, setHasScreenshots] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sessionRestored, setSessionRestored] = useState(false);
+
+  // Keep latestCanvasRef current so onComplete can snapshot it
+  useEffect(() => {
+    latestCanvasRef.current = { nodes, edges, targetInput, findingsByNode, hasScreenshots };
+  }, [nodes, edges, targetInput, findingsByNode, hasScreenshots]);
 
   // Restore canvas + history from IndexedDB on first load
   useEffect(() => {
@@ -357,6 +366,18 @@ function Dashboard() {
     setQaRunId(id);
   }, []);
 
+  const handleRestoreSession = useCallback((runId: string) => {
+    void loadNamedSession(runId).then((session) => {
+      if (!session || session.nodes.length === 0) return;
+      setNodes(session.nodes);
+      setEdges(session.edges);
+      setFindingsByNode(session.findingsByNode);
+      setHasScreenshots(session.hasScreenshots);
+      setTargetInput(session.targetInput);
+      setSelectedNodeId(null);
+    });
+  }, []);
+
   const handleSetBaseline = useCallback(() => {
     setNodes((prev) => {
       for (const n of prev) {
@@ -430,6 +451,7 @@ function Dashboard() {
           onResumeQA={handleResumeQA}
           onSetBaseline={handleSetBaseline}
           onClearBaseline={handleClearBaseline}
+          onRestoreSession={handleRestoreSession}
         />
 
         <main className="relative flex-1 overflow-hidden">
