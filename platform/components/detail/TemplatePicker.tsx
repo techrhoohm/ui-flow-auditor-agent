@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   SCRIPT_CATEGORIES,
   SCRIPT_TEMPLATES,
@@ -49,6 +49,10 @@ const TYPE_LABEL: Record<TestType, string> = {
 const PRIORITY_OPTIONS: Priority[] = ["P0", "P1", "P2"];
 const TYPE_OPTIONS: TestType[] = ["functional", "visual", "a11y", "perf"];
 
+const MIN_PREVIEW_H = 160;
+const MAX_PREVIEW_H = 520;
+const DEFAULT_PREVIEW_H = 280;
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function TemplatePicker(props: Props) {
@@ -63,6 +67,8 @@ export function TemplatePicker(props: Props) {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [tcCustom, setTcCustom] = useState<Map<string, TCCustom>>(new Map());
   const [scriptCustom, setScriptCustom] = useState<Map<string, ScriptCustom>>(new Map());
+  const [previewHeight, setPreviewHeight] = useState(DEFAULT_PREVIEW_H);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const visible = useMemo(
     () =>
@@ -74,6 +80,46 @@ export function TemplatePicker(props: Props) {
 
   const focused = allTemplates.find((t) => t.id === focusedId) ?? null;
   const checkedCount = checked.size;
+
+  // ── Drag-to-resize ───────────────────────────────────────────────────────
+
+  function handleDragStart(e: React.MouseEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = previewRef.current?.offsetHeight ?? previewHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      const h = Math.max(MIN_PREVIEW_H, Math.min(MAX_PREVIEW_H, startH - (ev.clientY - startY)));
+      if (previewRef.current) previewRef.current.style.height = `${h}px`;
+    };
+    const onUp = (ev: MouseEvent) => {
+      const h = Math.max(MIN_PREVIEW_H, Math.min(MAX_PREVIEW_H, startH - (ev.clientY - startY)));
+      setPreviewHeight(h);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  function handleTouchDragStart(e: React.TouchEvent) {
+    const startY = e.touches[0].clientY;
+    const startH = previewRef.current?.offsetHeight ?? previewHeight;
+
+    const onMove = (ev: TouchEvent) => {
+      const h = Math.max(MIN_PREVIEW_H, Math.min(MAX_PREVIEW_H, startH - (ev.touches[0].clientY - startY)));
+      if (previewRef.current) previewRef.current.style.height = `${h}px`;
+    };
+    const onEnd = (ev: TouchEvent) => {
+      const t = ev.changedTouches[0];
+      const h = Math.max(MIN_PREVIEW_H, Math.min(MAX_PREVIEW_H, startH - (t.clientY - startY)));
+      setPreviewHeight(h);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onEnd);
+  }
 
   // ── Edit draft for the focused template ──────────────────────────────────
 
@@ -102,8 +148,7 @@ export function TemplatePicker(props: Props) {
     if (!focusedId || !isCases) return;
     setTcCustom((prev) => {
       const next = new Map(prev);
-      const existing = next.get(focusedId) ?? {};
-      next.set(focusedId, { ...existing, title: val });
+      next.set(focusedId, { ...next.get(focusedId), title: val });
       return next;
     });
   }
@@ -112,8 +157,7 @@ export function TemplatePicker(props: Props) {
     if (!focusedId || isCases) return;
     setScriptCustom((prev) => {
       const next = new Map(prev);
-      const existing = next.get(focusedId) ?? {};
-      next.set(focusedId, { ...existing, name: val });
+      next.set(focusedId, { ...next.get(focusedId), name: val });
       return next;
     });
   }
@@ -123,15 +167,13 @@ export function TemplatePicker(props: Props) {
     if (isCases) {
       setTcCustom((prev) => {
         const next = new Map(prev);
-        const existing = next.get(focusedId) ?? {};
-        next.set(focusedId, { ...existing, body: val });
+        next.set(focusedId, { ...next.get(focusedId), body: val });
         return next;
       });
     } else {
       setScriptCustom((prev) => {
         const next = new Map(prev);
-        const existing = next.get(focusedId) ?? {};
-        next.set(focusedId, { ...existing, body: val });
+        next.set(focusedId, { ...next.get(focusedId), body: val });
         return next;
       });
     }
@@ -141,8 +183,7 @@ export function TemplatePicker(props: Props) {
     if (!focusedId || !isCases) return;
     setTcCustom((prev) => {
       const next = new Map(prev);
-      const existing = next.get(focusedId) ?? {};
-      next.set(focusedId, { ...existing, priority: val });
+      next.set(focusedId, { ...next.get(focusedId), priority: val });
       return next;
     });
   }
@@ -151,8 +192,7 @@ export function TemplatePicker(props: Props) {
     if (!focusedId || !isCases) return;
     setTcCustom((prev) => {
       const next = new Map(prev);
-      const existing = next.get(focusedId) ?? {};
-      next.set(focusedId, { ...existing, type: val });
+      next.set(focusedId, { ...next.get(focusedId), type: val });
       return next;
     });
   }
@@ -160,17 +200,9 @@ export function TemplatePicker(props: Props) {
   function resetFocusedEdits() {
     if (!focusedId) return;
     if (isCases) {
-      setTcCustom((prev) => {
-        const next = new Map(prev);
-        next.delete(focusedId);
-        return next;
-      });
+      setTcCustom((prev) => { const next = new Map(prev); next.delete(focusedId); return next; });
     } else {
-      setScriptCustom((prev) => {
-        const next = new Map(prev);
-        next.delete(focusedId);
-        return next;
-      });
+      setScriptCustom((prev) => { const next = new Map(prev); next.delete(focusedId); return next; });
     }
   }
 
@@ -183,25 +215,17 @@ export function TemplatePicker(props: Props) {
   function toggle(id: string) {
     setChecked((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }
 
   function focusTemplate(id: string) {
     setFocusedId((prev) => (prev === id ? null : id));
-    // Auto-check when a template is focused for editing
-    setChecked((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
+    setChecked((prev) => { const next = new Set(prev); next.add(id); return next; });
   }
 
-  function selectAll() {
-    setChecked(new Set(visible.map((t) => t.id)));
-  }
+  function selectAll() { setChecked(new Set(visible.map((t) => t.id))); }
 
   function clearAll() {
     setChecked((prev) => {
@@ -251,10 +275,7 @@ export function TemplatePicker(props: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-zinc-950/85 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-zinc-950/85 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal card */}
       <motion.div
@@ -262,7 +283,7 @@ export function TemplatePicker(props: Props) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ duration: 0.18 }}
-        className="relative z-10 flex w-full max-w-4xl flex-col rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl"
+        className="relative z-10 flex w-full max-w-2xl flex-col rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl"
         style={{ maxHeight: "88vh" }}
       >
         {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -288,12 +309,7 @@ export function TemplatePicker(props: Props) {
             aria-label="Close template picker"
           >
             <svg width="14" height="14" viewBox="0 0 14 14">
-              <path
-                d="M2 2l10 10M12 2L2 12"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
+              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </button>
         </div>
@@ -302,36 +318,30 @@ export function TemplatePicker(props: Props) {
         <div className="shrink-0 border-b border-zinc-800 px-5 py-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
             {allCategories.map((cat) => {
-              const count =
-                cat === "All"
-                  ? allTemplates.length
-                  : allTemplates.filter((t) => t.category === cat).length;
+              const count = cat === "All" ? allTemplates.length : allTemplates.filter((t) => t.category === cat).length;
               return (
                 <button
                   key={cat}
                   type="button"
-                  onClick={() => {
-                    setCategory(cat);
-                    setFocusedId(null);
-                  }}
+                  onClick={() => { setCategory(cat); setFocusedId(null); }}
                   className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
                     category === cat
                       ? "border-violet-400/50 bg-violet-500/15 text-violet-200"
                       : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                   }`}
                 >
-                  {cat}{" "}
-                  <span className="opacity-50">{count}</span>
+                  {cat} <span className="opacity-50">{count}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* ── Body: list + edit panel ─────────────────────────────────────── */}
-        <div className="flex min-h-0 flex-1">
-          {/* Template list */}
-          <div className="flex min-w-0 flex-1 flex-col border-r border-zinc-800">
+        {/* ── Body: list (top) + resizable preview (bottom) ──────────────── */}
+        <div className="flex min-h-0 flex-1 flex-col">
+
+          {/* Template list — always visible, scrollable */}
+          <div className="flex min-h-0 flex-1 flex-col">
             {/* Sub-header */}
             <div className="flex shrink-0 items-center justify-between border-b border-zinc-800/60 px-4 py-2">
               <span className="text-[10px] uppercase tracking-wider text-zinc-500">
@@ -346,7 +356,7 @@ export function TemplatePicker(props: Props) {
               </button>
             </div>
 
-            {/* List */}
+            {/* Cards */}
             <ul className="min-h-0 flex-1 overflow-y-auto p-3 space-y-1">
               {visible.map((t) => {
                 const isChecked = checked.has(t.id);
@@ -376,21 +386,12 @@ export function TemplatePicker(props: Props) {
                       >
                         <div
                           className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                            isChecked
-                              ? "border-violet-400 bg-violet-500/25"
-                              : "border-zinc-700 bg-zinc-900"
+                            isChecked ? "border-violet-400 bg-violet-500/25" : "border-zinc-700 bg-zinc-900"
                           }`}
                         >
                           {isChecked && (
                             <svg width="8" height="6" viewBox="0 0 8 6">
-                              <path
-                                d="M1 3l2 2 4-4"
-                                stroke="#a78bfa"
-                                strokeWidth="1.5"
-                                fill="none"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
+                              <path d="M1 3l2 2 4-4" stroke="#a78bfa" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           )}
                         </div>
@@ -399,11 +400,7 @@ export function TemplatePicker(props: Props) {
                       {/* Content */}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-1">
-                          <p
-                            className={`text-[12px] font-medium leading-snug ${
-                              isFocused ? "text-violet-200" : "text-zinc-100"
-                            }`}
-                          >
+                          <p className={`text-[12px] font-medium leading-snug ${isFocused ? "text-violet-200" : "text-zinc-100"}`}>
                             {tc ? tc.title : sc?.name}
                           </p>
                           <div className="flex shrink-0 items-center gap-1 mt-0.5">
@@ -413,19 +410,10 @@ export function TemplatePicker(props: Props) {
                               </span>
                             )}
                             <svg
-                              width="10"
-                              height="10"
-                              viewBox="0 0 10 10"
+                              width="10" height="10" viewBox="0 0 10 10"
                               className={`transition-colors ${isFocused ? "text-violet-400" : "text-zinc-600"}`}
                             >
-                              <path
-                                d="M3 5h4M5 3l2 2-2 2"
-                                stroke="currentColor"
-                                strokeWidth="1.2"
-                                fill="none"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
+                              <path d="M3 5h4M5 3l2 2-2 2" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           </div>
                         </div>
@@ -434,19 +422,11 @@ export function TemplatePicker(props: Props) {
                           {tc && (
                             <>
                               <span className="text-zinc-700">·</span>
-                              <span className={`rounded-full border px-1.5 py-px text-[9px] font-mono ${PRIORITY_STYLE[tc.priority]}`}>
-                                {tc.priority}
-                              </span>
-                              <span className={`rounded-full border px-1.5 py-px text-[9px] ${TYPE_STYLE[tc.type]}`}>
-                                {TYPE_LABEL[tc.type]}
-                              </span>
+                              <span className={`rounded-full border px-1.5 py-px text-[9px] font-mono ${PRIORITY_STYLE[tc.priority]}`}>{tc.priority}</span>
+                              <span className={`rounded-full border px-1.5 py-px text-[9px] ${TYPE_STYLE[tc.type]}`}>{TYPE_LABEL[tc.type]}</span>
                             </>
                           )}
-                          {sc && (
-                            <span className="text-[10px] text-zinc-500 truncate">
-                              {sc.description}
-                            </span>
-                          )}
+                          {sc && <span className="text-[10px] text-zinc-500 truncate">{sc.description}</span>}
                         </div>
                       </div>
                     </div>
@@ -456,160 +436,140 @@ export function TemplatePicker(props: Props) {
             </ul>
           </div>
 
-          {/* Edit panel */}
-          <div className="flex w-80 shrink-0 flex-col">
-            <AnimatePresence>
-              {focused && draft ? (
-                <motion.div
-                  key={focused.id}
-                  initial={{ opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 8 }}
-                  transition={{ duration: 0.15 }}
-                  className="flex flex-1 flex-col p-4 min-h-0"
+          {/* ── Resizable preview panel ─────────────────────────────────── */}
+          <AnimatePresence>
+            {focused && draft && (
+              <motion.div
+                key="preview"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                ref={previewRef}
+                style={{ height: previewHeight }}
+                className="shrink-0 flex flex-col overflow-hidden border-t border-zinc-800"
+              >
+                {/* Drag handle — like VS Code panel */}
+                <div
+                  className="group flex h-[10px] shrink-0 cursor-row-resize items-center justify-center bg-zinc-900/80 hover:bg-violet-500/10 transition-colors select-none"
+                  onMouseDown={handleDragStart}
+                  onTouchStart={handleTouchDragStart}
+                  title="Drag to resize"
                 >
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-wider text-zinc-500">
-                      Edit before adding
-                    </span>
+                  <div className="h-0.5 w-10 rounded-full bg-zinc-700 transition-colors group-hover:bg-violet-400/50" />
+                </div>
+
+                {/* Panel header */}
+                <div className="flex shrink-0 items-center justify-between border-b border-zinc-800/60 bg-zinc-900/40 px-4 py-2">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+                    Edit before adding
+                  </span>
+                  <div className="flex items-center gap-2">
                     {hasCustomization(focused.id) && (
-                      <button
-                        type="button"
-                        onClick={resetFocusedEdits}
-                        className="text-[10px] text-zinc-500 hover:text-zinc-300"
-                      >
+                      <button type="button" onClick={resetFocusedEdits} className="text-[10px] text-zinc-500 hover:text-zinc-300">
                         Reset
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setFocusedId(null)}
+                      className="text-zinc-600 hover:text-zinc-300 transition-colors"
+                      aria-label="Close preview"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10">
+                        <path d="M2 2l6 6M8 2L2 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                      </svg>
+                    </button>
                   </div>
+                </div>
 
-                  <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto min-h-0">
-                    {/* Title / Name */}
-                    {isCases && "title" in draft && (
-                      <div>
-                        <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
-                          Title
-                        </label>
-                        <input
-                          type="text"
-                          value={draft.title ?? ""}
-                          onChange={(e) => updateFocusedTitle(e.target.value)}
-                          className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[12px] font-medium text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none"
-                        />
-                      </div>
-                    )}
-                    {!isCases && "name" in draft && (
-                      <div>
-                        <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
-                          Name
-                        </label>
-                        <input
-                          type="text"
-                          value={draft.name ?? ""}
-                          onChange={(e) => updateFocusedName(e.target.value)}
-                          className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[12px] font-medium text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none"
-                        />
-                      </div>
-                    )}
-
-                    {/* Priority + Type (cases only) */}
-                    {isCases && "priority" in draft && "type" in draft && (
-                      <div className="flex flex-wrap gap-2">
-                        <div>
-                          <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
-                            Priority
-                          </label>
-                          <div className="flex gap-0.5 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
-                            {PRIORITY_OPTIONS.map((p) => (
-                              <button
-                                key={p}
-                                type="button"
-                                onClick={() => updateFocusedPriority(p)}
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-medium transition-colors ${
-                                  draft.priority === p
-                                    ? "bg-violet-500/15 text-violet-200"
-                                    : "text-zinc-400 hover:text-zinc-200"
-                                }`}
-                              >
-                                {p}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
-                            Type
-                          </label>
-                          <div className="flex flex-wrap gap-0.5 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
-                            {TYPE_OPTIONS.map((tp) => (
-                              <button
-                                key={tp}
-                                type="button"
-                                onClick={() => updateFocusedType(tp)}
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                                  draft.type === tp
-                                    ? "bg-violet-500/15 text-violet-200"
-                                    : "text-zinc-400 hover:text-zinc-200"
-                                }`}
-                              >
-                                {TYPE_LABEL[tp]}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Body */}
-                    <div className="flex flex-1 flex-col">
-                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
-                        {isCases ? "Steps & expected outcome" : "Script body"}
-                      </label>
-                      <textarea
-                        value={draft.body}
-                        onChange={(e) => updateFocusedBody(e.target.value)}
-                        spellCheck={!isCases}
-                        className="min-h-[180px] flex-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-zinc-200 focus:border-violet-400/50 focus:outline-none resize-none"
+                {/* Scrollable edit fields */}
+                <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4 min-h-0">
+                  {isCases && "title" in draft && (
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">Title</label>
+                      <input
+                        type="text"
+                        value={draft.title ?? ""}
+                        onChange={(e) => updateFocusedTitle(e.target.value)}
+                        className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[12px] font-medium text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none"
                       />
                     </div>
+                  )}
+                  {!isCases && "name" in draft && (
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">Name</label>
+                      <input
+                        type="text"
+                        value={draft.name ?? ""}
+                        onChange={(e) => updateFocusedName(e.target.value)}
+                        className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[12px] font-medium text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/50 focus:outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {isCases && "priority" in draft && "type" in draft && (
+                    <div className="flex flex-wrap gap-2">
+                      <div>
+                        <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">Priority</label>
+                        <div className="flex gap-0.5 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
+                          {PRIORITY_OPTIONS.map((p) => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => updateFocusedPriority(p)}
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-medium transition-colors ${
+                                draft.priority === p ? "bg-violet-500/15 text-violet-200" : "text-zinc-400 hover:text-zinc-200"
+                              }`}
+                            >
+                              {p}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">Type</label>
+                        <div className="flex flex-wrap gap-0.5 rounded-md border border-zinc-800 bg-zinc-900 p-0.5">
+                          {TYPE_OPTIONS.map((tp) => (
+                            <button
+                              key={tp}
+                              type="button"
+                              onClick={() => updateFocusedType(tp)}
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                                draft.type === tp ? "bg-violet-500/15 text-violet-200" : "text-zinc-400 hover:text-zinc-200"
+                              }`}
+                            >
+                              {TYPE_LABEL[tp]}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-1 flex-col">
+                    <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">
+                      {isCases ? "Steps & expected outcome" : "Script body"}
+                    </label>
+                    <textarea
+                      value={draft.body}
+                      onChange={(e) => updateFocusedBody(e.target.value)}
+                      spellCheck={!isCases}
+                      className="min-h-[80px] flex-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-zinc-200 focus:border-violet-400/50 focus:outline-none resize-none"
+                    />
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setChecked((prev) => {
-                        const next = new Set(prev);
-                        next.add(focused.id);
-                        return next;
-                      });
-                    }}
-                    className="mt-3 shrink-0 w-full rounded-md border border-emerald-500/30 bg-emerald-500/10 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+                    onClick={() => setChecked((prev) => { const next = new Set(prev); next.add(focused.id); return next; })}
+                    className="shrink-0 w-full rounded-md border border-emerald-500/30 bg-emerald-500/10 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors"
                   >
                     {checked.has(focused.id) ? "✓ Selected for adding" : "Select this template"}
                   </button>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="empty"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="flex flex-1 flex-col items-center justify-center p-6 text-center"
-                >
-                  <div className="mb-2 text-2xl opacity-20">
-                    {isCases ? "📋" : "⌨️"}
-                  </div>
-                  <p className="text-[12px] text-zinc-500">
-                    Click any template to preview and edit before adding.
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-600">
-                    Or use checkboxes to bulk-select without editing.
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* ── Footer ─────────────────────────────────────────────────────── */}
