@@ -124,11 +124,11 @@ export function Sidebar({
                         {formatTime(r.startedAt)}
                       </span>
                       {r.completedAt ? (
-                        <span className="font-mono text-[9px] text-zinc-600">
+                        <span className="font-mono text-[10px] text-zinc-600">
                           done
                         </span>
                       ) : (
-                        <span className="font-mono text-[9px] text-violet-300">
+                        <span className="font-mono text-[10px] text-violet-300">
                           in-progress
                         </span>
                       )}
@@ -159,7 +159,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={onClearBaseline}
-                className="text-[9px] text-zinc-600 hover:text-rose-300"
+                className="text-[10px] text-zinc-600 hover:text-rose-300"
                 title="Clear baseline"
               >
                 Clear

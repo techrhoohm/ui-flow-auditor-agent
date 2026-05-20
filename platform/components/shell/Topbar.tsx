@@ -41,7 +41,7 @@ function PlatformBadge({ input }: { input: string }) {
 
   return (
     <div
-      className={`flex h-6 w-14 shrink-0 items-center justify-center rounded-md border font-mono text-[10px] font-semibold uppercase tracking-wider transition-colors ${colors.badge} ${colors.text}`}
+      className={`flex h-[30px] w-14 shrink-0 items-center justify-center rounded-md border font-mono text-[10px] font-semibold uppercase tracking-wider transition-colors ${colors.badge} ${colors.text}`}
       title={`Detected: ${platform.label}`}
     >
       {platform.label}
@@ -277,7 +277,7 @@ export function Topbar({
             type="button"
             onClick={handleStart}
             disabled={!canStart}
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-zinc-200 transition-colors hover:enabled:border-violet-400/40 hover:enabled:bg-violet-500/10 hover:enabled:text-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-violet-500 bg-violet-600 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:enabled:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Start audit
           </button>

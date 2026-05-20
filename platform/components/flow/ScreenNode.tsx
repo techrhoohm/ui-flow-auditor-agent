@@ -97,7 +97,7 @@ export function ScreenNode({ id, data }: NodeProps<ScreenNodeType>) {
               {data.label}
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1 gap-y-1">
             <RegressionBadge pct={typeof data.regressionPct === "number" ? data.regressionPct : null} />
             <ScriptBadge summary={data.scriptSummary} />
             {data.testCaseCount && data.testCaseCount > 0 ? (

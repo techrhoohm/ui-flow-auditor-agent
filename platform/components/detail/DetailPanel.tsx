@@ -93,9 +93,11 @@ export function DetailPanel({
               <h2 className="mt-0.5 truncate text-[15px] font-semibold text-zinc-100">
                 {data.label}
               </h2>
-              <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">
-                node id: {nodeId}
-              </p>
+              {data.nodeUrl && (
+                <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">
+                  {data.nodeUrl}
+                </p>
+              )}
             </div>
             <button
               type="button"
