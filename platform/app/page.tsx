@@ -88,6 +88,9 @@ function Dashboard() {
 
   // Always-fresh ref so onComplete snapshot captures current canvas state
   const latestCanvasRef = useRef({ nodes, edges, targetInput, findingsByNode, hasScreenshots: false });
+  // Holds the pending run key set just before run.start() so we can save an early snapshot
+  const pendingRunKeyRef = useRef<string | null>(null);
+  const [sessionMissing, setSessionMissing] = useState(false);
 
   const run = useAuditRun(EMPTY_SCRIPT);
 
@@ -131,7 +134,12 @@ function Dashboard() {
   useEffect(() => {
     const unsub = run.onComplete((r) => {
       setHistory((h) => [r, ...h].slice(0, 20));
+      // Overwrite the early snapshot with full findings; also save under the canonical run ID.
       void saveNamedSession(r.id, latestCanvasRef.current);
+      if (pendingRunKeyRef.current && pendingRunKeyRef.current !== r.id) {
+        void saveNamedSession(pendingRunKeyRef.current, latestCanvasRef.current);
+      }
+      pendingRunKeyRef.current = null;
     });
     return unsub;
   }, [run]);
@@ -239,7 +247,7 @@ function Dashboard() {
     void saveAuditHistory(history);
   }, [sessionRestored, history]);
 
-  const swapToDynamic = useCallback((res: UrlAuditResponse) => {
+  const swapToDynamic = useCallback((res: UrlAuditResponse): { nodes: Node<ScreenNodeData>[]; edges: Edge[]; hasScreenshots: boolean } => {
     const dynamicNodes: Node<ScreenNodeData>[] = res.nodes.map((n) => ({
       id: n.id,
       type: "screen",
@@ -261,10 +269,12 @@ function Dashboard() {
       source: e.source,
       target: e.target,
     }));
+    const hs = res.nodes.some((n) => !!res.screenshots[n.id]);
     setNodes(dynamicNodes);
     setEdges(dynamicEdges);
     setFindingsByNode({});
-    setHasScreenshots(res.nodes.some((n) => !!res.screenshots[n.id]));
+    setHasScreenshots(hs);
+    return { nodes: dynamicNodes, edges: dynamicEdges, hasScreenshots: hs };
   }, []);
 
   const handleStart = useCallback(async () => {
@@ -290,10 +300,15 @@ function Dashboard() {
           throw new Error((body as { error?: string })?.error ?? `HTTP ${res.status}`);
         }
         const data = (await res.json()) as UrlAuditResponse;
-        swapToDynamic(data);
+        const canvas = swapToDynamic(data);
         const tk = deriveTargetKey(trimmed);
         const diffItems = data.nodes.map((n) => ({ nodeId: n.id, screenshotUrl: data.screenshots[n.id] ?? null }));
         setTimeout(() => runDiffs(tk, diffItems), 100);
+        // Save an early snapshot immediately (before the animation completes) so
+        // history restoration works even if the tab is closed mid-animation.
+        const earlyKey = `run-${Date.now()}`;
+        pendingRunKeyRef.current = earlyKey;
+        void saveNamedSession(earlyKey, { ...canvas, targetInput: trimmed, findingsByNode: {} });
         setTimeout(() => run.start(data.script), 50);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -368,7 +383,11 @@ function Dashboard() {
 
   const handleRestoreSession = useCallback((runId: string) => {
     void loadNamedSession(runId).then((session) => {
-      if (!session || session.nodes.length === 0) return;
+      if (!session || session.nodes.length === 0) {
+        setSessionMissing(true);
+        setTimeout(() => setSessionMissing(false), 3000);
+        return;
+      }
       setNodes(session.nodes);
       setEdges(session.edges);
       setFindingsByNode(session.findingsByNode);
@@ -468,6 +487,14 @@ function Dashboard() {
               >
                 dismiss
               </button>
+            </div>
+          )}
+
+          {sessionMissing && (
+            <div className="absolute inset-x-0 top-0 z-50 flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 backdrop-blur-sm">
+              <span className="flex-1 font-mono text-[12px] text-amber-200">
+                Session data not saved for this audit — re-run it to enable restoration.
+              </span>
             </div>
           )}
 

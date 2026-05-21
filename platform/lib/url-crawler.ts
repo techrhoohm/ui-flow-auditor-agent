@@ -34,10 +34,13 @@ export type CrawlOptions = {
   viewport?: { width: number; height: number };
 };
 
+// Vercel serverless has a 120s hard kill limit; stay well under it.
+const IS_VERCEL = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
 const DEFAULT_OPTIONS: Required<CrawlOptions> = {
   maxPages: 8,
-  perPageTimeoutMs: 18000,
-  totalTimeoutMs: 90000,
+  perPageTimeoutMs: IS_VERCEL ? 10000 : 18000,
+  totalTimeoutMs: IS_VERCEL ? 50000 : 90000,
   viewport: { width: 1280, height: 800 },
 };
 
@@ -186,7 +189,8 @@ export async function crawlSite(
     }
 
     // Interactive pass — discover SPA routes via click navigation
-    if (Date.now() < deadline && pages.length < opts.maxPages) {
+    // Skip on Vercel: too slow given the 120s function limit
+    if (!IS_VERCEL && Date.now() < deadline && pages.length < opts.maxPages) {
       const remaining = opts.maxPages - pages.length;
       if (remaining > 0) {
         try {

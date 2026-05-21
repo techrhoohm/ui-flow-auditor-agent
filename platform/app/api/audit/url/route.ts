@@ -43,6 +43,12 @@ export async function POST(req: Request) {
 
   try {
     const crawl = await crawlSite(parsed.toString(), { maxPages });
+    if (crawl.pages.length === 0) {
+      return NextResponse.json(
+        { error: `No pages could be loaded from ${parsed.origin}. The site may be blocking automated browsers (bot protection, CAPTCHA, or IP block). Try a different URL.` },
+        { status: 422 }
+      );
+    }
     const { script, nodes, edges, screenshots } = buildResponse(crawl);
     return NextResponse.json({
       script,
@@ -57,8 +63,13 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const isTimeout = /timeout|ETIMEDOUT|deadline/i.test(message);
     return NextResponse.json(
-      { error: `Crawl failed: ${message}` },
+      {
+        error: isTimeout
+          ? `Crawl timed out loading ${parsed.hostname}. The site may be slow, blocking automated browsers, or returning large pages. Try again or use a simpler URL.`
+          : `Crawl failed: ${message}`,
+      },
       { status: 500 }
     );
   }
