@@ -21,6 +21,12 @@ import { TemplatePicker } from "@/components/detail/TemplatePicker";
 
 type AuditFinding = { message: string; severity: string };
 
+type EvalResult = {
+  id: string;
+  status: "pass" | "fail" | "blocked" | "skip";
+  reasoning: string;
+};
+
 type Props = {
   targetKey: string;
   nodeId: string;
@@ -28,6 +34,8 @@ type Props = {
   nodeKind: string;
   findings: AuditFinding[];
   model: string;
+  screenshotUrl: string | null;
+  nodeUrl: string | null;
 };
 
 const PRIORITY_OPTIONS: Priority[] = ["P0", "P1", "P2"];
@@ -62,7 +70,20 @@ type SuggestedCase = {
   type: TestType;
 };
 
-export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings, model }: Props) {
+const EVAL_STATUS_STYLE: Record<EvalResult["status"], string> = {
+  pass: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  fail: "border-rose-500/40 bg-rose-500/10 text-rose-300",
+  blocked: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  skip: "border-zinc-700 bg-zinc-900 text-zinc-400",
+};
+const EVAL_STATUS_LABEL: Record<EvalResult["status"], string> = {
+  pass: "Pass",
+  fail: "Fail",
+  blocked: "Blocked",
+  skip: "Skip",
+};
+
+export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings, model, screenshotUrl, nodeUrl }: Props) {
   const cases = useTestCases(targetKey, nodeId);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -73,6 +94,55 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [showPicker, setShowPicker] = useState(false);
+
+  // AI evaluation runner state
+  const [evalResults, setEvalResults] = useState<Record<string, EvalResult>>({});
+  const [evalRunning, setEvalRunning] = useState(false);
+  const [evalError, setEvalError] = useState<string | null>(null);
+  const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
+
+  const runEvaluation = async (subset?: TestCase[]) => {
+    const toRun = subset ?? cases;
+    if (toRun.length === 0) return;
+    setEvalRunning(true);
+    setEvalError(null);
+    try {
+      const res = await fetch("/api/ai/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          testCases: toRun.map((tc) => ({ id: tc.id, title: tc.title, body: tc.body, priority: tc.priority, type: tc.type })),
+          screenshotUrl,
+          nodeUrl,
+          nodeLabel,
+          model,
+        }),
+      });
+      const data = await res.json() as { results?: EvalResult[]; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const map: Record<string, EvalResult> = {};
+      for (const r of data.results ?? []) map[r.id] = r;
+      setEvalResults((prev) => ({ ...prev, ...map }));
+    } catch (err) {
+      setEvalError(err instanceof Error ? err.message : "Evaluation failed");
+    } finally {
+      setEvalRunning(false);
+    }
+  };
+
+  const toggleReasoning = (id: string) => {
+    setExpandedReasoning((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const clearResults = () => {
+    setEvalResults({});
+    setExpandedReasoning(new Set());
+    setEvalError(null);
+  };
 
   const askNora = async () => {
     setSuggesting(true);
@@ -202,6 +272,26 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
         </div>
         {!draft && (
           <div className="flex items-center gap-1.5">
+            {cases.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void runEvaluation()}
+                disabled={evalRunning}
+                title="Run all test cases against this screen using AI"
+                className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-wait disabled:opacity-50"
+              >
+                {evalRunning ? "Running…" : "▶ Run"}
+              </button>
+            )}
+            {Object.keys(evalResults).length > 0 && !evalRunning && (
+              <button
+                type="button"
+                onClick={clearResults}
+                className="text-[10px] text-zinc-500 hover:text-zinc-300"
+              >
+                Clear
+              </button>
+            )}
             <button
               type="button"
               onClick={askNora}
@@ -262,6 +352,34 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
           {suggestError}
         </div>
       )}
+
+      {evalError && (
+        <div className="mt-2 rounded-md border border-rose-500/30 bg-rose-500/5 px-3 py-1.5 text-[11px] text-rose-300">
+          {evalError}
+        </div>
+      )}
+
+      {evalRunning && (
+        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-1.5">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+          <span className="text-[11px] text-emerald-300">AI is evaluating test cases against this screen…</span>
+        </div>
+      )}
+
+      {!evalRunning && Object.keys(evalResults).length > 0 && (() => {
+        const vals = Object.values(evalResults);
+        const pass = vals.filter((r) => r.status === "pass").length;
+        const fail = vals.filter((r) => r.status === "fail").length;
+        const blocked = vals.filter((r) => r.status === "blocked").length;
+        return (
+          <div className="mt-2 flex items-center gap-3 rounded-md border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[11px]">
+            <span className="text-zinc-500">Last run:</span>
+            {pass > 0 && <span className="text-emerald-300">{pass} pass</span>}
+            {fail > 0 && <span className="text-rose-300">{fail} fail</span>}
+            {blocked > 0 && <span className="text-amber-200">{blocked} blocked</span>}
+          </div>
+        );
+      })()}
 
       <AnimatePresence>
         {suggestions.length > 0 && (
@@ -411,65 +529,102 @@ export function TestCasesTab({ targetKey, nodeId, nodeLabel, nodeKind, findings,
         </p>
       ) : (
         <ul className="mt-4 space-y-2">
-          {cases.map((tc) => (
-            <li
-              key={tc.id}
-              className={`rounded-md border bg-zinc-900/60 p-3 transition-colors ${
-                editingId === tc.id
-                  ? "border-violet-400/40"
-                  : "border-zinc-800 hover:border-zinc-700"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <button
-                    type="button"
-                    onClick={() => startEdit(tc)}
-                    className="block w-full text-left text-[13px] font-medium text-zinc-100 hover:text-violet-200"
-                  >
-                    {tc.title}
-                  </button>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <span
-                      className={`rounded-full border px-1.5 py-0.5 text-[9px] font-mono ${PRIORITY_STYLE[tc.priority]}`}
+          {cases.map((tc) => {
+            const result = evalResults[tc.id];
+            const reasoningOpen = expandedReasoning.has(tc.id);
+            return (
+              <li
+                key={tc.id}
+                className={`rounded-md border bg-zinc-900/60 p-3 transition-colors ${
+                  editingId === tc.id
+                    ? "border-violet-400/40"
+                    : result?.status === "fail"
+                    ? "border-rose-500/30"
+                    : result?.status === "pass"
+                    ? "border-emerald-500/30"
+                    : result?.status === "blocked"
+                    ? "border-amber-500/30"
+                    : "border-zinc-800 hover:border-zinc-700"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(tc)}
+                      className="block w-full text-left text-[13px] font-medium text-zinc-100 hover:text-violet-200"
                     >
-                      {tc.priority}
-                    </span>
-                    <span
-                      className={`rounded-full border px-1.5 py-0.5 text-[9px] ${TYPE_STYLE[tc.type]}`}
+                      {tc.title}
+                    </button>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-mono ${PRIORITY_STYLE[tc.priority]}`}>
+                        {tc.priority}
+                      </span>
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[9px] ${TYPE_STYLE[tc.type]}`}>
+                        {TYPE_LABEL[tc.type]}
+                      </span>
+                      <span className="font-mono text-[10px] text-zinc-500">
+                        {new Date(tc.updatedAt).toLocaleDateString()}
+                      </span>
+                      {result && (
+                        <button
+                          type="button"
+                          onClick={() => toggleReasoning(tc.id)}
+                          className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium transition-opacity hover:opacity-80 ${EVAL_STATUS_STYLE[result.status]}`}
+                        >
+                          {EVAL_STATUS_LABEL[result.status]}
+                        </button>
+                      )}
+                      {evalRunning && !result && (
+                        <span className="font-mono text-[9px] text-zinc-500 animate-pulse">evaluating…</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {cases.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => void runEvaluation([tc])}
+                        disabled={evalRunning}
+                        title="Run only this test case"
+                        className="text-[10px] text-zinc-500 hover:text-emerald-300 disabled:opacity-40"
+                      >
+                        ▶
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => remove(tc.id)}
+                      aria-label="Delete test case"
+                      className="text-zinc-600 transition-colors hover:text-rose-300"
+                      title="Delete"
                     >
-                      {TYPE_LABEL[tc.type]}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-500">
-                      {new Date(tc.updatedAt).toLocaleDateString()}
-                    </span>
+                      <svg width="12" height="12" viewBox="0 0 12 12">
+                        <path
+                          d="M3 4h6v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4zM2 3h8M5 2h2"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          fill="none"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </button>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => remove(tc.id)}
-                  aria-label="Delete test case"
-                  className="text-zinc-600 transition-colors hover:text-rose-300"
-                  title="Delete"
-                >
-                  <svg width="12" height="12" viewBox="0 0 12 12">
-                    <path
-                      d="M3 4h6v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4zM2 3h8M5 2h2"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
-                      fill="none"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </button>
-              </div>
-              {tc.body && (
-                <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950/60 p-2 font-mono text-[11px] leading-relaxed text-zinc-300">
-                  {tc.body}
-                </pre>
-              )}
-            </li>
-          ))}
+                {tc.body && (
+                  <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950/60 p-2 font-mono text-[11px] leading-relaxed text-zinc-300">
+                    {tc.body}
+                  </pre>
+                )}
+                {result && reasoningOpen && (
+                  <div className={`mt-2 rounded-md border px-3 py-2 text-[11px] leading-relaxed ${EVAL_STATUS_STYLE[result.status]}`}>
+                    <div className="mb-0.5 text-[9px] uppercase tracking-wider opacity-60">Nora&apos;s reasoning</div>
+                    {result.reasoning}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

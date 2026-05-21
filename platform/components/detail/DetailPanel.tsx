@@ -142,7 +142,16 @@ export function DetailPanel({
               <FindingsTab nodeId={nodeId} data={data} findings={findings} nodeLabel={data.label} model={model} />
             )}
             {tab === "tests" && (
-              <TestCasesTab targetKey={targetKey} nodeId={nodeId} nodeLabel={data.label} nodeKind={data.kind} findings={findings} model={model} />
+              <TestCasesTab
+                targetKey={targetKey}
+                nodeId={nodeId}
+                nodeLabel={data.label}
+                nodeKind={data.kind}
+                findings={findings}
+                model={model}
+                screenshotUrl={data.screenshotUrl ?? null}
+                nodeUrl={data.nodeUrl ?? null}
+              />
             )}
             {tab === "scripts" && (
               <ScriptsTab
