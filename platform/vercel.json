@@ -8,6 +8,9 @@
       "memory": 1024,
       "maxDuration": 120
     },
+    "app/api/agent/cron/route.ts": {
+      "maxDuration": 10
+    },
     "app/api/test/run/route.ts": {
       "memory": 1024,
       "maxDuration": 60
@@ -25,7 +28,7 @@
   },
   "crons": [
     {
-      "path": "/api/agent/run",
+      "path": "/api/agent/cron",
       "schedule": "0 9 * * *"
     }
   ]

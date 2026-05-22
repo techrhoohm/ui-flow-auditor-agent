@@ -206,7 +206,24 @@ async function runTarget(
 // --- Route handler ---
 export async function POST(req: Request) {
   let body: Body = {};
-  try { body = await req.json(); } catch { /* no body = run all */ }
+
+  // Read body once — needed for both signature verification and JSON parsing.
+  const rawBody = await req.text().catch(() => "");
+
+  // QStash signature verification: only enforced when both signing keys are
+  // configured AND the Upstash-Signature header is present (i.e. QStash sent
+  // this request). Direct calls from the UI bypass verification intentionally.
+  const qSig = req.headers.get("Upstash-Signature");
+  const qCurrent = process.env.QSTASH_CURRENT_SIGNING_KEY;
+  const qNext = process.env.QSTASH_NEXT_SIGNING_KEY;
+  if (qSig && qCurrent && qNext) {
+    const { Receiver } = await import("@upstash/qstash");
+    const receiver = new Receiver({ currentSigningKey: qCurrent, nextSigningKey: qNext });
+    const valid = await receiver.verify({ signature: qSig, body: rawBody }).catch(() => false);
+    if (!valid) return NextResponse.json({ error: "Invalid QStash signature" }, { status: 401 });
+  }
+
+  try { body = rawBody ? (JSON.parse(rawBody) as Body) : {}; } catch { /* no body = run all */ }
 
   const config = await getAgentConfig();
   const targets = config.targets.filter(
