@@ -4,6 +4,9 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "playwright",
     "playwright-core",
+    "playwright-extra",
+    "puppeteer-extra",
+    "puppeteer-extra-plugin-stealth",
     "@axe-core/playwright",
     "@sparticuz/chromium",
     "axe-core",
