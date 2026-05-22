@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-type Body = { targetId?: string };
+type Body = { targetId?: string; targets?: AgentTarget[] };
 
 // --- GitHub issue filing ---
 async function fileGitHubIssues(
@@ -237,10 +237,12 @@ async function handleRun(req: Request) {
 
   try { body = rawBody ? (JSON.parse(rawBody) as Body) : {}; } catch { /* no body = run all */ }
 
+  // UI "Run Now" passes targets inline to avoid cold-start config loss.
+  // QStash/cron passes targetId and looks up from stored config (requires Redis).
   const config = await getAgentConfig();
-  const targets = config.targets.filter(
-    (t) => t.enabled && (!body.targetId || t.id === body.targetId)
-  );
+  const targets: AgentTarget[] = body.targets && body.targets.length > 0
+    ? body.targets.filter((t) => t.enabled)
+    : config.targets.filter((t) => t.enabled && (!body.targetId || t.id === body.targetId));
 
   if (targets.length === 0) {
     return NextResponse.json({ error: "No enabled targets configured." }, { status: 400 });

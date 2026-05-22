@@ -245,12 +245,16 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
 
   const handleRunNow = async (targetId?: string) => {
     setRunning(true);
-    startStream(); // connect to SSE immediately — updates arrive before POST returns
+    startStream();
     try {
+      // Pass targets inline so the server function doesn't need Redis to find them.
+      const targets = targetId
+        ? config.targets.filter((t) => t.id === targetId && t.enabled)
+        : config.targets.filter((t) => t.enabled);
       await fetch("/api/agent/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(targetId ? { targetId } : {}),
+        body: JSON.stringify({ targets }),
       });
     } finally {
       setRunning(false);
