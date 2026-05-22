@@ -17,8 +17,24 @@ const nextConfig: NextConfig = {
   // tracer can't follow statically — include it explicitly so the file lands in
   // /var/task/node_modules/playwright-core/browsers.json at runtime.
   outputFileTracingIncludes: {
-    "/api/audit/url": ["./node_modules/playwright-core/browsers.json"],
-    "/api/test/run": ["./node_modules/playwright-core/browsers.json"],
+    "/api/audit/url": [
+      "./node_modules/playwright-core/browsers.json",
+      "./node_modules/playwright-extra/**/*",
+      "./node_modules/puppeteer-extra-plugin-stealth/**/*",
+      "./node_modules/puppeteer-extra/**/*",
+    ],
+    "/api/test/run": [
+      "./node_modules/playwright-core/browsers.json",
+      "./node_modules/playwright-extra/**/*",
+      "./node_modules/puppeteer-extra-plugin-stealth/**/*",
+      "./node_modules/puppeteer-extra/**/*",
+    ],
+    "/api/agent/run": [
+      "./node_modules/playwright-core/browsers.json",
+      "./node_modules/playwright-extra/**/*",
+      "./node_modules/puppeteer-extra-plugin-stealth/**/*",
+      "./node_modules/puppeteer-extra/**/*",
+    ],
   },
 };
 

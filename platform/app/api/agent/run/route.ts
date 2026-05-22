@@ -205,6 +205,18 @@ async function runTarget(
 
 // --- Route handler ---
 export async function POST(req: Request) {
+  try {
+    return await handleRun(req);
+  } catch (err) {
+    console.error("[agent/run] Unhandled error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleRun(req: Request) {
   let body: Body = {};
 
   // Read body once — needed for both signature verification and JSON parsing.
