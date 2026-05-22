@@ -34,7 +34,8 @@ const nextConfig: NextConfig = {
   // ecosystem — include the entire dependency tree explicitly for each route.
   outputFileTracingIncludes: (() => {
     const stealthBundle = [
-      "./node_modules/playwright-core/browsers.json",
+      "./node_modules/playwright-core/**/*",
+      "./node_modules/playwright/**/*",
       "./node_modules/playwright-extra/**/*",
       "./node_modules/puppeteer-extra/**/*",
       "./node_modules/puppeteer-extra-plugin/**/*",
