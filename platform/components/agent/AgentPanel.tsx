@@ -247,15 +247,19 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
     setRunning(true);
     startStream();
     try {
-      // Pass targets inline so the server function doesn't need Redis to find them.
       const targets = targetId
         ? config.targets.filter((t) => t.id === targetId && t.enabled)
         : config.targets.filter((t) => t.enabled);
-      await fetch("/api/agent/run", {
+      const res = await fetch("/api/agent/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targets }),
       });
+      if (res.ok) {
+        const data = await res.json() as { runs?: AgentRun[] };
+        const loadable = (data.runs ?? []).filter((r) => r.state === "done" && r.crawlResult);
+        if (loadable.length > 0) onLoadIntoCanvas(loadable);
+      }
     } finally {
       setRunning(false);
     }
