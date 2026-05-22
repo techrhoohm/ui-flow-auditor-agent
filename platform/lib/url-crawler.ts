@@ -48,6 +48,9 @@ const DEFAULT_OPTIONS: Omit<Required<CrawlOptions>, "onPage"> = {
 const REALISTIC_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+// sec-ch-ua matching the UA string above
+const SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';
+
 const BLOCK_PATTERNS: RegExp[] = [
   /unusual traffic/i,
   /are you a human/i,
@@ -55,10 +58,70 @@ const BLOCK_PATTERNS: RegExp[] = [
   /request (?:has been )?blocked/i,
   /verify you are human/i,
   /captcha/i,
-  /cloudflare/i,
-  /just a moment/i,
+  /just a moment/i,               // Cloudflare challenge page
   /enable javascript and cookies to continue/i,
+  /sorry, you have been blocked/i,
+  /why did this happen\?/i,       // Cloudflare block explanation
 ];
+
+// Injects deep fingerprint overrides so the page sees a real Chrome browser.
+// The stealth plugin handles most evasions; this covers the remaining gaps.
+const STEALTH_INIT_SCRIPT = `
+(() => {
+  // Chrome runtime object — headless omits this entirely
+  if (!window.chrome) {
+    window.chrome = {
+      app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+      runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {} },
+      loadTimes: function() { return {}; },
+      csi: function() { return {}; },
+    };
+  }
+
+  // Realistic plugin list — headless Chrome has none
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+      const arr = [
+        { name: 'Chrome PDF Plugin',      filename: 'internal-pdf-viewer',  description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer',      filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client',          filename: 'internal-nacl-plugin',  description: '' },
+      ];
+      arr.forEach((p, i) => { Object.defineProperty(arr, i, { value: p }); });
+      Object.defineProperty(arr, 'length', { value: arr.length });
+      Object.defineProperty(arr, 'item',   { value: (i) => arr[i] ?? null });
+      Object.defineProperty(arr, 'namedItem', { value: (n) => arr.find(p => p.name === n) ?? null });
+      Object.defineProperty(arr, 'refresh', { value: () => {} });
+      return arr;
+    },
+  });
+
+  // Languages array — headless returns single-item array
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+  // Permissions — headless returns 'denied' for notifications, real Chrome returns 'default'
+  const _query = Permissions.prototype.query;
+  Permissions.prototype.query = function(params) {
+    if (params && params.name === 'notifications') {
+      return Promise.resolve({ state: 'default', onchange: null });
+    }
+    return _query.call(this, params);
+  };
+
+  // WebGL vendor/renderer — headless exposes SwiftShader (detectable)
+  const _getParam = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function(param) {
+    if (param === 37445) return 'Intel Inc.';                         // UNMASKED_VENDOR_WEBGL
+    if (param === 37446) return 'Intel Iris OpenGL Engine';           // UNMASKED_RENDERER_WEBGL
+    return _getParam.call(this, param);
+  };
+  const _getParam2 = WebGL2RenderingContext.prototype.getParameter;
+  WebGL2RenderingContext.prototype.getParameter = function(param) {
+    if (param === 37445) return 'Intel Inc.';
+    if (param === 37446) return 'Intel Iris OpenGL Engine';
+    return _getParam2.call(this, param);
+  };
+})();
+`;
 
 const impactToSeverity = (impact: string | null): CrawlFinding["severity"] => {
   if (impact === "critical" || impact === "serious") return "high";
@@ -106,18 +169,24 @@ export async function crawlSite(
 
   try {
     browser = await launchBrowser();
+    // Slight viewport jitter so every run looks different to fingerprinters
+    const vw = opts.viewport.width  + Math.floor(Math.random() * 40) - 20;
+    const vh = opts.viewport.height + Math.floor(Math.random() * 20) - 10;
     const context = await browser.newContext({
-      viewport: opts.viewport,
+      viewport: { width: vw, height: vh },
       userAgent: REALISTIC_UA,
       locale: "en-US",
       timezoneId: "America/Los_Angeles",
       extraHTTPHeaders: {
         "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua": SEC_CH_UA,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
       },
     });
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    });
+    await context.addInitScript(STEALTH_INIT_SCRIPT);
 
     const visited = new Map<string, string>(); // canonical URL -> nodeId
     const queue: Array<{ url: string; depth: number; parentId: string | null }> = [
