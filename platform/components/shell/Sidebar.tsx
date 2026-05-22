@@ -30,6 +30,29 @@ const formatDuration = (start: number, end: number) => {
   return `${s}s`;
 };
 
+function hostname(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
+function groupHistoryByDate(history: AuditRunResult[]) {
+  const now = Date.now();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const yesterdayStart = todayStart.getTime() - 86400000;
+  const groups: { label: string; runs: AuditRunResult[] }[] = [
+    { label: "Today", runs: [] },
+    { label: "Yesterday", runs: [] },
+    { label: "Earlier", runs: [] },
+  ];
+  for (const r of history) {
+    void now;
+    if (r.startedAt >= todayStart.getTime()) groups[0].runs.push(r);
+    else if (r.startedAt >= yesterdayStart) groups[1].runs.push(r);
+    else groups[2].runs.push(r);
+  }
+  return groups.filter((g) => g.runs.length > 0);
+}
+
 export function Sidebar({
   running,
   progress,
@@ -201,41 +224,74 @@ export function Sidebar({
             No completed audits yet.
           </p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
-            {history.map((r) => {
-              const high = r.findings.filter((f) => f.severity === "high").length;
-              return (
-                <li key={r.id}>
-                  <button
-                    type="button"
-                    onClick={() => onRestoreSession(r.id)}
-                    className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-left transition-colors hover:border-violet-500/40 hover:bg-zinc-800/60"
-                    title="Click to restore this audit session"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="truncate text-[12px] text-zinc-200">
-                        {r.target}
-                      </span>
-                      <span className="ml-2 shrink-0 font-mono text-[10px] text-zinc-500">
-                        {formatTime(r.startedAt)}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
-                      <span>{r.findings.length} findings</span>
-                      {high > 0 && (
-                        <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 text-[10px] text-rose-300">
-                          {high} high
-                        </span>
-                      )}
-                      <span className="ml-auto font-mono">
-                        {formatDuration(r.startedAt, r.endedAt)}
-                      </span>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="mt-2 space-y-3">
+            {groupHistoryByDate(history).map((group) => (
+              <div key={group.label}>
+                <div className="mb-1 text-[9px] font-semibold uppercase tracking-widest text-zinc-600">
+                  {group.label}
+                </div>
+                <ul className="space-y-1.5">
+                  {group.runs.map((r) => {
+                    const targets = r.targets ?? [r.target];
+                    const primary = hostname(targets[0] ?? r.target);
+                    const extra = targets.length - 1;
+                    const high = r.findings.filter((f) => f.severity === "high").length;
+                    const medium = r.findings.filter((f) => f.severity === "medium").length;
+                    const low = r.findings.filter((f) => f.severity === "low").length;
+                    return (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          onClick={() => onRestoreSession(r.id)}
+                          className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-left transition-colors hover:border-violet-500/40 hover:bg-zinc-800/60"
+                          title="Click to restore this audit session"
+                        >
+                          {/* Row 1: domain + extra pill + time */}
+                          <div className="flex items-center gap-1.5">
+                            <span className="min-w-0 flex-1 truncate text-[12px] text-zinc-200">
+                              {primary}
+                            </span>
+                            {extra > 0 && (
+                              <span className="shrink-0 rounded-full border border-zinc-700 bg-zinc-800 px-1.5 text-[9px] text-zinc-400">
+                                +{extra} more
+                              </span>
+                            )}
+                            <span className="shrink-0 font-mono text-[10px] text-zinc-600">
+                              {formatTime(r.startedAt)}
+                            </span>
+                          </div>
+                          {/* Row 2: severity badges + duration */}
+                          <div className="mt-1 flex items-center gap-1.5">
+                            {high > 0 && (
+                              <span className="rounded border border-rose-500/30 bg-rose-500/10 px-1 text-[9px] text-rose-300">
+                                ● {high}
+                              </span>
+                            )}
+                            {medium > 0 && (
+                              <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 text-[9px] text-amber-300">
+                                ● {medium}
+                              </span>
+                            )}
+                            {low > 0 && (
+                              <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1 text-[9px] text-emerald-300">
+                                ● {low}
+                              </span>
+                            )}
+                            {r.findings.length === 0 && (
+                              <span className="text-[10px] text-zinc-600">no findings</span>
+                            )}
+                            <span className="ml-auto font-mono text-[10px] text-zinc-600">
+                              {formatDuration(r.startedAt, r.endedAt)}
+                            </span>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

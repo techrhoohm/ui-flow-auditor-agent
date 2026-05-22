@@ -19,11 +19,13 @@ type Props = {
   targetInput: string;
   model: string;
   hasNodes: boolean;
+  agentActive: boolean;
   onTargetChange: (value: string) => void;
   onModelChange: (id: string) => void;
   onStart: () => void;
   onStop: () => void;
   onExport: () => void;
+  onAgent: () => void;
 };
 
 const COLOR_CLASSES: Record<string, { badge: string; text: string }> = {
@@ -54,11 +56,13 @@ export function Topbar({
   targetInput,
   model,
   hasNodes,
+  agentActive,
   onTargetChange,
   onModelChange,
   onStart,
   onStop,
   onExport,
+  onAgent,
 }: Props) {
   const [local, setLocal] = useState(targetInput);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -139,7 +143,7 @@ export function Topbar({
             UI Flow Auditor
           </span>
           <span className="mt-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-            Milestone 16 · Vercel
+            Milestone 17 · Agent
           </span>
         </div>
       </div>
@@ -244,6 +248,29 @@ export function Topbar({
 
       {/* Right — model + run controls */}
       <div className="flex items-center gap-3">
+        {/* Agent button */}
+        <button
+          type="button"
+          onClick={onAgent}
+          title="Autonomous Agent"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors ${
+            agentActive
+              ? "border-violet-500/60 bg-violet-500/15 text-violet-200"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-violet-400/40 hover:bg-violet-500/10 hover:text-violet-200"
+          }`}
+        >
+          {agentActive && (
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-300 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-violet-400" />
+            </span>
+          )}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+            <path fillRule="evenodd" d="M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0ZM9 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM6.75 8a.75.75 0 0 0 0 1.5h.75v1.75a.75.75 0 0 0 1.5 0v-2.5A.75.75 0 0 0 8.25 8h-1.5Z" clipRule="evenodd" />
+          </svg>
+          Agent
+        </button>
+
         <ModelPicker model={model} onChange={onModelChange} />
 
         <button

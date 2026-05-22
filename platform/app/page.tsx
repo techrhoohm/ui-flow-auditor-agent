@@ -3,6 +3,7 @@
 import {
   ReactFlowProvider,
   applyNodeChanges,
+  useReactFlow,
   type Edge,
   type Node,
 } from "@xyflow/react";
@@ -30,6 +31,9 @@ import { saveRegression, clearRegressions, useRegressions } from "@/lib/regressi
 import { ExportModal } from "@/components/export/ExportModal";
 import { saveCanvasSession, loadCanvasSession, saveNamedSession, loadNamedSession } from "@/lib/canvas-session";
 import { saveAuditHistory, loadAuditHistory } from "@/lib/audit-history";
+import { AgentPanel } from "@/components/agent/AgentPanel";
+import type { AgentRun } from "@/lib/agent-store";
+import { AnimatePresence } from "framer-motion";
 
 const NORA_ORIGIN_OFFSET = { x: 72, y: -72 };
 
@@ -72,6 +76,7 @@ export default function Page() {
 }
 
 function Dashboard() {
+  const { fitView } = useReactFlow();
   const [nodes, setNodes] = useState<Node<ScreenNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [history, setHistory] = useState<AuditRunResult[]>([]);
@@ -209,6 +214,24 @@ function Dashboard() {
   const [hasScreenshots, setHasScreenshots] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [sessionRestored, setSessionRestored] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentActive, setAgentActive] = useState(false);
+
+  // Poll agent status to show active indicator in topbar
+  useEffect(() => {
+    const tick = () => {
+      fetch("/api/agent/status")
+        .then((r) => r.json())
+        .then((d: { current?: { state?: string } }) => {
+          const s = d.current?.state;
+          setAgentActive(!!s && !["done", "error"].includes(s));
+        })
+        .catch(() => {});
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   // Keep latestCanvasRef current so onComplete can snapshot it
   useEffect(() => {
@@ -394,8 +417,9 @@ function Dashboard() {
       setHasScreenshots(session.hasScreenshots);
       setTargetInput(session.targetInput);
       setSelectedNodeId(null);
+      setTimeout(() => fitView({ padding: 0.15, minZoom: 0.05, duration: 500 }), 80);
     });
-  }, []);
+  }, [fitView]);
 
   const handleSetBaseline = useCallback(() => {
     setNodes((prev) => {
@@ -450,11 +474,13 @@ function Dashboard() {
         targetInput={targetInput}
         model={model}
         hasNodes={nodes.length > 0}
+        agentActive={agentActive}
         onTargetChange={setTargetInput}
         onModelChange={setModel}
         onStart={handleStart}
         onStop={run.stop}
         onExport={() => setExportOpen(true)}
+        onAgent={() => setAgentOpen((o) => !o)}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -545,6 +571,144 @@ function Dashboard() {
         targetInput={targetInput}
         onClose={() => setExportOpen(false)}
       />
+
+      <AnimatePresence>
+        {agentOpen && (
+          <AgentPanel
+            onClose={() => setAgentOpen(false)}
+            onLoadIntoCanvas={async (runs: AgentRun[]) => {
+              const validRuns = runs.filter((r) => r.state === "done" && r.crawlResult);
+              if (validRuns.length === 0) return;
+
+              const GROUP_COL_W = 320;
+              const GROUP_ROW_H = 240;
+              const GROUP_GAP = 200;
+              const MAX_PER_GROUP = 10;
+              const COLS = 3;
+
+              const newNodes: Node<ScreenNodeData>[] = [];
+              const newEdges: Edge[] = [];
+              const newFindingsByNode: Record<string, AuditFinding[]> = {};
+              const allTargetUrls: string[] = [];
+              const now = Date.now();
+
+              // Width of one group: COLS columns + right padding
+              const groupWidth = COLS * GROUP_COL_W + GROUP_GAP;
+
+              for (let gi = 0; gi < validRuns.length; gi++) {
+                const run = validRuns[gi];
+                const cr = run.crawlResult!;
+                const origin = (() => { try { return new URL(run.url).origin; } catch { return run.url; } })();
+                allTargetUrls.push(origin);
+
+                // Prefix every node/edge ID with the group index to prevent
+                // cross-domain collisions (all domains use "entry", "page-1" etc.)
+                const pid = (id: string) => `g${gi}-${id}`;
+
+                // Save screenshots to baselines keyed by prefixed node ID
+                await Promise.all(
+                  cr.nodes
+                    .filter((n) => n.screenshot)
+                    .map((n) => saveBaseline(origin, pid(n.id), n.screenshot!))
+                );
+
+                const groupOriginX = gi * groupWidth + 80;
+                const visible = cr.nodes.slice(0, MAX_PER_GROUP);
+                const overflowCount = cr.nodes.length - MAX_PER_GROUP;
+
+                visible.forEach((n, i) => {
+                  const col = i % COLS;
+                  const row = Math.floor(i / COLS);
+                  newNodes.push({
+                    id: pid(n.id),
+                    type: "screen",
+                    position: { x: groupOriginX + col * GROUP_COL_W, y: 80 + row * GROUP_ROW_H },
+                    data: {
+                      label: n.label,
+                      kind: "tab" as const,
+                      issueCount: cr.findings.filter((f) => f.nodeId === n.id).length,
+                      thumbnailSeed: pid(n.id),
+                      screenshotUrl: n.screenshot ?? null,
+                      nodeUrl: n.url,
+                      isActive: false,
+                      flashSeverity: null,
+                    },
+                  });
+                });
+
+                if (overflowCount > 0) {
+                  const stubIdx = visible.length;
+                  const col = stubIdx % COLS;
+                  const row = Math.floor(stubIdx / COLS);
+                  newNodes.push({
+                    id: pid(`${run.targetId}-overflow`),
+                    type: "screen",
+                    position: { x: groupOriginX + col * GROUP_COL_W, y: 80 + row * GROUP_ROW_H },
+                    data: {
+                      label: `+${overflowCount} more`,
+                      kind: "tab" as const,
+                      issueCount: 0,
+                      thumbnailSeed: pid(`overflow-${run.targetId}`),
+                      screenshotUrl: null,
+                      nodeUrl: run.url,
+                      isActive: false,
+                      flashSeverity: null,
+                    },
+                  });
+                }
+
+                // Edges stay within the group — prefix both endpoints
+                cr.edges.forEach((e, i) => {
+                  newEdges.push({
+                    id: `ag-g${gi}-e${i}`,
+                    source: pid(e.source),
+                    target: pid(e.target),
+                  });
+                });
+
+                for (const f of cr.findings) {
+                  const prefixedId = pid(f.nodeId);
+                  if (!newFindingsByNode[prefixedId]) newFindingsByNode[prefixedId] = [];
+                  newFindingsByNode[prefixedId].push({
+                    nodeId: prefixedId,
+                    severity: f.severity as "low" | "medium" | "high",
+                    message: f.message,
+                    at: now,
+                  });
+                }
+              }
+
+              const allFindings = Object.values(newFindingsByNode).flat();
+              const historyEntry: AuditRunResult = {
+                id: `agent-${now}`,
+                target: allTargetUrls[0] ?? "agent",
+                targets: allTargetUrls,
+                startedAt: validRuns[0]!.startedAt,
+                endedAt: now,
+                findings: allFindings,
+              };
+
+              const hasShots = newNodes.some((n) => !!n.data.screenshotUrl);
+              setNodes(newNodes);
+              setEdges(newEdges);
+              setFindingsByNode(newFindingsByNode);
+              setTargetInput(validRuns[0]!.url);
+              setHasScreenshots(hasShots);
+              setHistory((h) => [historyEntry, ...h].slice(0, 20));
+              // Persist so history-card restore works
+              void saveNamedSession(historyEntry.id, {
+                targetInput: validRuns[0]!.url,
+                nodes: newNodes,
+                edges: newEdges,
+                findingsByNode: newFindingsByNode,
+                hasScreenshots: hasShots,
+              });
+              setAgentOpen(false);
+              setTimeout(() => fitView({ padding: 0.15, minZoom: 0.05, duration: 500 }), 80);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

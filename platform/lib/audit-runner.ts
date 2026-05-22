@@ -14,6 +14,7 @@ export type AuditFinding = {
 export type AuditRunResult = {
   id: string;
   target: string;
+  targets?: string[];   // multi-URL runs; target holds the primary
   startedAt: number;
   endedAt: number;
   findings: AuditFinding[];

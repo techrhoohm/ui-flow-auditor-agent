@@ -32,12 +32,13 @@ export type CrawlOptions = {
   perPageTimeoutMs?: number;
   totalTimeoutMs?: number;
   viewport?: { width: number; height: number };
+  onPage?: (page: CrawlPage, crawledSoFar: number) => void | Promise<void>;
 };
 
 // Vercel serverless has a 120s hard kill limit; stay well under it.
 const IS_VERCEL = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-const DEFAULT_OPTIONS: Required<CrawlOptions> = {
+const DEFAULT_OPTIONS: Omit<Required<CrawlOptions>, "onPage"> = {
   maxPages: 8,
   perPageTimeoutMs: IS_VERCEL ? 10000 : 18000,
   totalTimeoutMs: IS_VERCEL ? 50000 : 90000,
@@ -151,6 +152,7 @@ export async function crawlSite(
           findings: result.findings,
         };
         pages.push(crawlPage);
+        if (opts.onPage) await opts.onPage(crawlPage, pages.length);
         if (next.parentId) {
           edges.push({ source: next.parentId, target: nodeId });
         }

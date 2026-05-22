@@ -41,7 +41,9 @@ export function FlowCanvas({
         onNodeClick={(_, n) => onNodeClick?.(n.id)}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        minZoom={0.05}
+        maxZoom={2}
+        fitViewOptions={{ padding: 0.15, minZoom: 0.05 }}
         proOptions={{ hideAttribution: true }}
         colorMode="dark"
         nodesDraggable

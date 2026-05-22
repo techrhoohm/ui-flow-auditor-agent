@@ -4,6 +4,10 @@
       "memory": 1024,
       "maxDuration": 120
     },
+    "app/api/agent/run/route.ts": {
+      "memory": 1024,
+      "maxDuration": 120
+    },
     "app/api/test/run/route.ts": {
       "memory": 1024,
       "maxDuration": 60
@@ -18,5 +22,11 @@
     "app/api/integrations/slack/route.ts": {
       "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/agent/run",
+      "schedule": "0 9 * * *"
+    }
+  ]
 }
