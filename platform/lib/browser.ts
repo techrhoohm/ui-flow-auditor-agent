@@ -10,41 +10,27 @@ const LOCAL_ARGS = [
   "--disable-features=IsolateOrigins,site-per-process",
 ];
 
-// Lazily initialized so module-load failures don't crash the entire function.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _chromium: any = null;
-
-async function getChromium() {
-  if (!_chromium) {
-    const { chromium } = await import("playwright-extra");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-    chromium.use(StealthPlugin());
-    _chromium = chromium;
-  }
-  return _chromium;
-}
-
 /**
- * Returns a stealth-wrapped Playwright Browser.
+ * Returns a Playwright Browser instance.
  * On Vercel/Lambda → uses @sparticuz/chromium binary.
- * Locally        → uses playwright-bundled Chromium.
+ * Locally         → uses the playwright-bundled Chromium.
+ * Stealth evasions are applied per-context in url-crawler.ts via addInitScript.
  */
 export async function launchBrowser(): Promise<Browser> {
-  const chromium = await getChromium();
-
   if (IS_VERCEL) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const sparticuz = require("@sparticuz/chromium") as {
       args: string[];
       executablePath: () => Promise<string>;
-      headless: boolean;
     };
+    const { chromium } = await import("playwright-core");
     return chromium.launch({
       args: [...sparticuz.args, "--no-sandbox", "--disable-blink-features=AutomationControlled"],
       executablePath: await sparticuz.executablePath(),
       headless: true,
-    }) as unknown as Browser;
+    });
   }
-  return chromium.launch({ headless: true, args: LOCAL_ARGS }) as unknown as Browser;
+
+  const { chromium } = await import("playwright-core");
+  return chromium.launch({ headless: true, args: LOCAL_ARGS });
 }
