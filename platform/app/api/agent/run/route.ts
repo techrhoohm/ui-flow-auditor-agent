@@ -16,13 +16,14 @@ type Body = { targetId?: string; targets?: AgentTarget[] };
 async function fileGitHubIssues(
   findings: { nodeLabel: string; severity: string; message: string }[],
   target: string
-): Promise<number> {
+): Promise<{ filed: number; urls: string[] }> {
   const token = process.env.AGENT_GITHUB_TOKEN;
   const owner = process.env.AGENT_GITHUB_OWNER;
   const repo = process.env.AGENT_GITHUB_REPO;
-  if (!token || !owner || !repo || !findings.length) return 0;
+  if (!token || !owner || !repo || !findings.length) return { filed: 0, urls: [] };
 
   let filed = 0;
+  const urls: string[] = [];
   for (const f of findings) {
     const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
       method: "POST",
@@ -45,9 +46,13 @@ async function fileGitHubIssues(
         labels: [`severity: ${f.severity}`, "automated-audit"],
       }),
     });
-    if (res.ok) filed++;
+    if (res.ok) {
+      filed++;
+      const data = await res.json() as { html_url?: string };
+      if (data.html_url) urls.push(data.html_url);
+    }
   }
-  return filed;
+  return { filed, urls };
 }
 
 // --- Slack notification ---
@@ -176,8 +181,9 @@ async function runTarget(
     await upsertRun(run);
 
     if (config.notifications.github && filtered.length > 0) {
-      const filed = await fileGitHubIssues(filtered, target.url);
+      const { filed, urls } = await fileGitHubIssues(filtered, target.url);
       run.issuesFiled = filed;
+      run.issueUrls = urls;
       log(`Filed ${filed} GitHub issue(s)`);
     }
 

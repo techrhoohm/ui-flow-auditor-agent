@@ -6,9 +6,49 @@ import type { AgentConfig, AgentTarget } from "@/lib/agent-config";
 import { DEFAULT_AGENT_CONFIG } from "@/lib/agent-config";
 import type { AgentRun } from "@/lib/agent-store";
 
-// --- hooks ---
+// --- helpers ---
 
 const LS_CONFIG_KEY = "uifa:agent:config";
+const LS_RUN_PREFIX = "uifa:agent:run:";
+
+type TargetRunSummary = {
+  runAt: number;
+  state: string;
+  issuesFound: number;
+  maxSeverity: "low" | "medium" | "high" | null;
+};
+
+function lsSaveTargetRun(targetId: string, s: TargetRunSummary) {
+  try { localStorage.setItem(LS_RUN_PREFIX + targetId, JSON.stringify(s)); } catch { /* quota */ }
+}
+
+function lsLoadTargetRun(targetId: string): TargetRunSummary | null {
+  try {
+    const raw = localStorage.getItem(LS_RUN_PREFIX + targetId);
+    if (!raw) return null;
+    return JSON.parse(raw) as TargetRunSummary;
+  } catch { return null; }
+}
+
+function relativeTime(ts: number): string {
+  const secs = Math.round((Date.now() - ts) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
+function maxSeverityFromRun(run: AgentRun): "low" | "medium" | "high" | null {
+  const rank: Record<string, number> = { low: 1, medium: 2, high: 3 };
+  const findings = run.crawlResult?.findings ?? [];
+  return findings.reduce<"low" | "medium" | "high" | null>((max, f) => {
+    const sev = f.severity as "low" | "medium" | "high";
+    if (!max || rank[sev] > rank[max]) return sev;
+    return max;
+  }, null);
+}
+
+// --- hooks ---
 
 function lsLoadConfig(): AgentConfig | null {
   try {
@@ -195,6 +235,21 @@ function RunCard({ run, label }: { run: AgentRun; label: string }) {
         </div>
       )}
 
+      {/* M25: GitHub issue links */}
+      {run.issueUrls && run.issueUrls.length > 0 && (
+        <a
+          href={run.issueUrls[0]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1.5 flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 hover:underline"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-2.5 w-2.5">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+          View {run.issueUrls.length} GitHub issue{run.issueUrls.length > 1 ? "s" : ""} →
+        </a>
+      )}
+
       {run.log.length > 0 && (
         <div className="mt-1.5">
           <button
@@ -217,39 +272,88 @@ function RunCard({ run, label }: { run: AgentRun; label: string }) {
   );
 }
 
+const SEV_BADGE: Record<string, string> = {
+  high: "border-rose-500/50 bg-rose-500/10 text-rose-300",
+  medium: "border-amber-500/50 bg-amber-500/10 text-amber-300",
+  low: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300",
+};
+
 function TargetRow({
   target,
+  lastRun,
+  runDisabled,
   onToggle,
   onRemove,
+  onRun,
 }: {
   target: AgentTarget;
+  lastRun: TargetRunSummary | null;
+  runDisabled: boolean;
   onToggle: () => void;
   onRemove: () => void;
+  onRun: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
-      <button
-        type="button"
-        onClick={onToggle}
-        className={`h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${
-          target.enabled
-            ? "border-emerald-400/60 bg-emerald-400/20"
-            : "border-zinc-700 bg-zinc-800"
-        }`}
-        title={target.enabled ? "Enabled — click to disable" : "Disabled — click to enable"}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12px] text-zinc-200">{target.name}</div>
-        <div className="truncate font-mono text-[10px] text-zinc-500">{target.url}</div>
+    <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className={`h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${
+            target.enabled
+              ? "border-emerald-400/60 bg-emerald-400/20"
+              : "border-zinc-700 bg-zinc-800"
+          }`}
+          title={target.enabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] text-zinc-200">{target.name}</div>
+          <div className="truncate font-mono text-[10px] text-zinc-500">{target.url}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={runDisabled || !target.enabled}
+          title="Run this target now"
+          className="shrink-0 rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:enabled:border-violet-500/50 hover:enabled:text-violet-300 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          ▶
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="shrink-0 text-[10px] text-zinc-700 hover:text-rose-400"
+          title="Remove target"
+        >
+          ✕
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="shrink-0 text-[10px] text-zinc-700 hover:text-rose-400"
-        title="Remove target"
-      >
-        ✕
-      </button>
+
+      {/* M26: last run summary */}
+      {lastRun && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-zinc-600">
+          <span>{relativeTime(lastRun.runAt)}</span>
+          {lastRun.issuesFound > 0 && (
+            <>
+              <span>·</span>
+              <span>{lastRun.issuesFound} finding{lastRun.issuesFound !== 1 ? "s" : ""}</span>
+            </>
+          )}
+          {lastRun.maxSeverity && (
+            <>
+              <span>·</span>
+              <span className={`rounded border px-1 py-px text-[8px] font-semibold uppercase tracking-wider ${SEV_BADGE[lastRun.maxSeverity]}`}>
+                {lastRun.maxSeverity}
+              </span>
+            </>
+          )}
+          {lastRun.state === "error" && (
+            <span className="ml-auto rounded border border-rose-500/40 bg-rose-500/10 px-1 py-px text-[8px] font-semibold uppercase tracking-wider text-rose-400">
+              failed
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -268,6 +372,21 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
   const [newName, setNewName] = useState("");
   const addRef = useRef<HTMLInputElement>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // M26: per-target run summaries
+  const [targetRuns, setTargetRuns] = useState<Record<string, TargetRunSummary>>(() => {
+    if (typeof window === "undefined") return {};
+    const out: Record<string, TargetRunSummary> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(LS_RUN_PREFIX)) {
+        const id = k.slice(LS_RUN_PREFIX.length);
+        const v = lsLoadTargetRun(id);
+        if (v) out[id] = v;
+      }
+    }
+    return out;
+  });
 
   const isActive =
     status.current?.state &&
@@ -290,6 +409,23 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
       });
       if (res.ok) {
         const data = await res.json() as { runs?: AgentRun[] };
+
+        // M26: persist per-target summaries
+        const updates: Record<string, TargetRunSummary> = {};
+        for (const r of data.runs ?? []) {
+          const summary: TargetRunSummary = {
+            runAt: r.startedAt,
+            state: r.state,
+            issuesFound: r.issuesFound,
+            maxSeverity: maxSeverityFromRun(r),
+          };
+          lsSaveTargetRun(r.targetId, summary);
+          updates[r.targetId] = summary;
+        }
+        if (Object.keys(updates).length > 0) {
+          setTargetRuns((prev) => ({ ...prev, ...updates }));
+        }
+
         const loadable = (data.runs ?? []).filter((r) => r.state === "done" && r.crawlResult);
         if (loadable.length > 0) {
           try {
@@ -346,7 +482,7 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
       animate={{ x: 0 }}
       exit={{ x: "100%" }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed right-0 top-0 z-50 flex h-full w-80 flex-col border-l border-zinc-800 bg-zinc-950 shadow-2xl"
+      className="fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-zinc-800 bg-zinc-950 shadow-2xl sm:w-80"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
@@ -441,8 +577,11 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
               <TargetRow
                 key={t.id}
                 target={t}
+                lastRun={targetRuns[t.id] ?? null}
+                runDisabled={running || !!isActive}
                 onToggle={() => toggleTarget(t.id)}
                 onRemove={() => removeTarget(t.id)}
+                onRun={() => void handleRunNow(t.id)}
               />
             ))}
           </div>

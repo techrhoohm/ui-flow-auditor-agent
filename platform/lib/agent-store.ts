@@ -19,6 +19,7 @@ export interface AgentRun {
   pagesFound: number;
   issuesFound: number;
   issuesFiled: number;
+  issueUrls?: string[];
   log: string[];
   error?: string;
   // Live page-by-page data streamed during crawl

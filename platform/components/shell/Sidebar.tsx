@@ -83,7 +83,7 @@ export function Sidebar({
   }, [targetKey]);
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950/50">
+    <aside className="hidden sm:flex w-60 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950/50">
       <div className="border-b border-zinc-800 px-4 py-3">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
           Audit

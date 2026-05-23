@@ -134,11 +134,11 @@ export function Topbar({
     <div className="shrink-0">
     <header className="flex h-12 items-center justify-between border-b border-zinc-800 bg-zinc-950/70 px-4 backdrop-blur">
       {/* Left — brand */}
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-violet-400/40 bg-violet-500/10 font-mono text-[11px] text-violet-300">
           N
         </div>
-        <div className="flex flex-col leading-none">
+        <div className="hidden flex-col leading-none sm:flex">
           <span className="text-[13px] font-medium text-zinc-100">
             UI Flow Auditor
           </span>
@@ -149,7 +149,7 @@ export function Topbar({
       </div>
 
       {/* Center — smart target bar */}
-      <div className="flex flex-1 items-center gap-2 px-6">
+      <div className="flex flex-1 items-center gap-2 px-2 sm:px-6">
         <PlatformBadge input={local} />
 
         {/* Main input */}
