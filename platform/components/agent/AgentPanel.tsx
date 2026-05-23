@@ -8,24 +8,51 @@ import type { AgentRun } from "@/lib/agent-store";
 
 // --- hooks ---
 
+const LS_CONFIG_KEY = "uifa:agent:config";
+
+function lsLoadConfig(): AgentConfig | null {
+  try {
+    const raw = localStorage.getItem(LS_CONFIG_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as AgentConfig;
+  } catch { return null; }
+}
+
+function lsSaveConfig(c: AgentConfig) {
+  try { localStorage.setItem(LS_CONFIG_KEY, JSON.stringify(c)); } catch { /* quota */ }
+}
+
 function useAgentConfig() {
   const [config, setConfigState] = useState<AgentConfig>(DEFAULT_AGENT_CONFIG);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Seed from localStorage immediately so targets survive cold starts.
+    const local = lsLoadConfig();
+    if (local) setConfigState(local);
+
     fetch("/api/agent/config")
       .then((r) => r.json())
-      .then((d) => { setConfigState(d as AgentConfig); setLoading(false); })
+      .then((d) => {
+        const server = d as AgentConfig;
+        // Prefer server config only if it has targets; otherwise keep localStorage.
+        const merged = server.targets.length > 0 ? server : (local ?? server);
+        setConfigState(merged);
+        lsSaveConfig(merged);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = useCallback(async (next: AgentConfig) => {
     setConfigState(next);
+    lsSaveConfig(next);
     await fetch("/api/agent/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(next),
-    });
+    }).catch(() => {/* non-fatal — localStorage is the durable store */});
   }, []);
 
   return { config, save, loading };
@@ -229,15 +256,18 @@ function TargetRow({
 
 // --- main panel ---
 
-type Props = { onClose: () => void; onLoadIntoCanvas: (runs: AgentRun[]) => void };
+type Props = { onClose: () => void; onLoadIntoCanvas: (runs: AgentRun[]) => Promise<void> | void };
 
 export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
   const { config, save, loading } = useAgentConfig();
   const { status, startStream } = useAgentStream();
   const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [newUrl, setNewUrl] = useState("");
   const [newName, setNewName] = useState("");
   const addRef = useRef<HTMLInputElement>(null);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isActive =
     status.current?.state &&
@@ -245,6 +275,9 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
 
   const handleRunNow = async (targetId?: string) => {
     setRunning(true);
+    setRunError(null);
+    setElapsed(0);
+    elapsedRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
     startStream();
     try {
       const targets = targetId
@@ -258,9 +291,24 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
       if (res.ok) {
         const data = await res.json() as { runs?: AgentRun[] };
         const loadable = (data.runs ?? []).filter((r) => r.state === "done" && r.crawlResult);
-        if (loadable.length > 0) onLoadIntoCanvas(loadable);
+        if (loadable.length > 0) {
+          try {
+            await onLoadIntoCanvas(loadable);
+          } catch (canvasErr) {
+            setRunError(`Canvas load failed: ${canvasErr instanceof Error ? canvasErr.message : String(canvasErr)}`);
+          }
+        } else {
+          const failed = (data.runs ?? []).find((r) => r.state === "error");
+          if (failed) setRunError(failed.error ?? "Run failed");
+        }
+      } else {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        setRunError(err.error ?? `Server error ${res.status}`);
       }
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "Network error");
     } finally {
+      if (elapsedRef.current) clearInterval(elapsedRef.current);
       setRunning(false);
     }
   };
@@ -327,6 +375,25 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
         {/* Status */}
         <div className="border-b border-zinc-800 px-4 py-3">
           <div className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">Status</div>
+
+          {/* Local run progress — shown when POST is in-flight (SSE may not get updates) */}
+          {running && (
+            <div className="mb-2 rounded-md border border-violet-800/40 bg-violet-900/20 p-2.5">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 animate-ping rounded-full bg-violet-400" />
+                <span className="text-[11px] text-violet-300 font-medium">Crawling… {elapsed}s</span>
+              </div>
+              <div className="mt-1 text-[10px] text-zinc-500">Results will load automatically when done.</div>
+            </div>
+          )}
+
+          {/* Error display */}
+          {runError && !running && (
+            <div className="mb-2 rounded-md border border-rose-800/40 bg-rose-900/20 p-2 text-[11px] text-rose-300">
+              {runError}
+            </div>
+          )}
+
           {loading ? (
             <div className="text-[11px] text-zinc-600">Loading…</div>
           ) : status.current && isActive ? (

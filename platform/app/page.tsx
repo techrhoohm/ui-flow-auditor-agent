@@ -576,7 +576,7 @@ function Dashboard() {
         {agentOpen && (
           <AgentPanel
             onClose={() => setAgentOpen(false)}
-            onLoadIntoCanvas={async (runs: AgentRun[]) => {
+            onLoadIntoCanvas={async (runs: AgentRun[]): Promise<void> => {
               const validRuns = runs.filter((r) => r.state === "done" && r.crawlResult);
               if (validRuns.length === 0) return;
 
@@ -605,11 +605,11 @@ function Dashboard() {
                 // cross-domain collisions (all domains use "entry", "page-1" etc.)
                 const pid = (id: string) => `g${gi}-${id}`;
 
-                // Save screenshots to baselines keyed by prefixed node ID
+                // Save screenshots to baselines — non-fatal if storage quota exceeded
                 await Promise.all(
                   cr.nodes
                     .filter((n) => n.screenshot)
-                    .map((n) => saveBaseline(origin, pid(n.id), n.screenshot!))
+                    .map((n) => saveBaseline(origin, pid(n.id), n.screenshot!).catch(() => {}))
                 );
 
                 const groupOriginX = gi * groupWidth + 80;
