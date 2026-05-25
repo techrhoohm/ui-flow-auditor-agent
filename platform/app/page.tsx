@@ -52,6 +52,7 @@ interface UITarget {
 interface StoredSession {
   session: Session;
   screenshotMap: Record<string, string>;
+  wireframeMap: Record<string, string>;
   realFindings: RealFinding[];
 }
 
@@ -628,11 +629,16 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
-function PreviewCard({ node, host, screenshotMap }: { node: TreeNode; host: string; screenshotMap: Record<string, string> }) {
+function PreviewCard({ node, host, screenshotMap, wireframeMap }: {
+  node: TreeNode; host: string;
+  screenshotMap: Record<string, string>;
+  wireframeMap: Record<string, string>;
+}) {
   const [view, setView] = useState<'screenshot' | 'wireframe'>('screenshot');
   const [annotations, setAnnotations] = useState(true);
   const url = 'https://' + host + (node.path === '/' ? '' : node.path);
   const realShot = screenshotMap[node.id];
+  const realWire = wireframeMap[node.id];
 
   return (
     <div className="preview">
@@ -661,7 +667,16 @@ function PreviewCard({ node, host, screenshotMap }: { node: TreeNode; host: stri
       </div>
       <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '') + (annotations ? '' : 'no-annot')}>
         {view === 'wireframe'
-          ? getWireframeForNode(node)
+          ? realWire
+            ? <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: realWire }}/>
+            : realShot
+              ? <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: 'var(--fg-faint)' }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ animation: 'spin 1.2s linear infinite' }}>
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                  </svg>
+                  <span style={{ fontSize: 11 }}>Generating wireframe…</span>
+                </div>
+              : getWireframeForNode(node)
           : realShot
             ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
             : getScreenshotForNode(node)}
@@ -683,10 +698,11 @@ interface RightPanelProps {
   selectedNode: TreeNode;
   session: Session;
   screenshotMap: Record<string, string>;
+  wireframeMap: Record<string, string>;
   realFindings: RealFinding[];
 }
 
-function RightPanel({ onClose, selectedNode, session, screenshotMap, realFindings }: RightPanelProps) {
+function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMap, realFindings }: RightPanelProps) {
   const node = selectedNode;
   const host = session.host;
   const [tab, setTab] = useState<'findings' | 'tests' | 'scripts' | 'timeline'>('findings');
@@ -749,7 +765,7 @@ function RightPanel({ onClose, selectedNode, session, screenshotMap, realFinding
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host} screenshotMap={screenshotMap}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap}/>
 
             <div className="sev-grid">
               <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
@@ -1062,6 +1078,7 @@ export default function Page() {
 
   // Real data state
   const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({});
+  const [wireframeMap, setWireframeMap] = useState<Record<string, string>>({});
   const [realFindings, setRealFindings] = useState<RealFinding[]>([]);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([...HISTORY]);
   const [agentSites, setAgentSites] = useState<AgentSite[]>([]);
@@ -1126,8 +1143,35 @@ export default function Page() {
     sessionStoreRef.current.set(id, {
       session: newSession,
       screenshotMap: shots,
+      wireframeMap: {},
       realFindings: findings,
     });
+  }, []);
+
+  /* ─── Wireframe generation (parallel, progressive) ────────────────── */
+
+  const generateWireframes = useCallback((shots: Record<string, string>, historyId?: string) => {
+    setWireframeMap({});
+    const entries = Object.entries(shots);
+    for (const [nodeId, screenshot] of entries) {
+      fetch('/api/wireframe/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ screenshot, nodeId }),
+      })
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then(({ svg }: { svg: string }) => {
+          setWireframeMap(prev => {
+            const next = { ...prev, [nodeId]: svg };
+            if (historyId) {
+              const stored = sessionStoreRef.current.get(historyId);
+              if (stored) sessionStoreRef.current.set(historyId, { ...stored, wireframeMap: next });
+            }
+            return next;
+          });
+        })
+        .catch(() => { /* silently skip failed nodes */ });
+    }
   }, []);
 
   /* ─── Real URL audit ──────────────────────────────────────────────── */
@@ -1144,6 +1188,7 @@ export default function Page() {
     setAgentOpen(false);
     setRealFindings([]);
     setScreenshotMap({});
+    setWireframeMap({});
 
     const t0 = Date.now();
 
@@ -1202,9 +1247,12 @@ export default function Page() {
           rule: '',
         }));
 
+      const shots = data.screenshots || {};
+      const historyId = 'live-' + Date.now();
+
       setSession(newSession);
       setSelectedNodeId(tree.id);
-      setScreenshotMap(data.screenshots || {});
+      setScreenshotMap(shots);
       setRealFindings(findings);
       setDiscoveredIds(null);
       setStatusOverrides({});
@@ -1212,7 +1260,12 @@ export default function Page() {
       setCrawlProgress({ current: null, done: data.meta.pagesScanned, total: data.meta.pagesScanned });
       setShowPanel(true);
 
-      addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, data.screenshots || {});
+      addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots);
+
+      // Fire parallel AI wireframe generation for each captured page
+      if (Object.keys(shots).length > 0) {
+        generateWireframes(shots, historyId);
+      }
 
     } catch (err) {
       if (token.cancelled) return;
@@ -1232,7 +1285,7 @@ export default function Page() {
         setCrawlProgress({ current: null, done: 0, total: 0 });
       }
     }
-  }, [url, isAuditing, addToHistory]);
+  }, [url, isAuditing, addToHistory, generateWireframes]);
 
   /* ─── Agent run (parallel per-target with SSE stream) ─────────────── */
 
@@ -1367,6 +1420,11 @@ export default function Page() {
 
         const dur = run.updatedAt && run.startedAt ? run.updatedAt - run.startedAt : Date.now() - t0;
         addToHistory(target.url, agentSession, dur, findings, shots);
+
+        // Generate AI wireframes for this target's screenshots
+        if (Object.keys(shots).length > 0) {
+          generateWireframes(shots);
+        }
       }
 
     } catch (err) {
@@ -1376,7 +1434,7 @@ export default function Page() {
     } finally {
       setAgentRunning(false);
     }
-  }, [agentRunning, addToHistory]);
+  }, [agentRunning, addToHistory, generateWireframes]);
 
   /* ─── Restore session from history ───────────────────────────────── */
 
@@ -1386,6 +1444,7 @@ export default function Page() {
     setSession(stored.session);
     setSelectedNodeId(stored.session.tree.id);
     setScreenshotMap(stored.screenshotMap);
+    setWireframeMap(stored.wireframeMap || {});
     setRealFindings(stored.realFindings);
     setDiscoveredIds(null);
     setStatusOverrides({});
@@ -1470,6 +1529,7 @@ export default function Page() {
                 selectedNode={selectedNode}
                 session={session}
                 screenshotMap={screenshotMap}
+                wireframeMap={wireframeMap}
                 realFindings={realFindings}
               />
             : null}
