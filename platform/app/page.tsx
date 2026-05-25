@@ -631,6 +631,34 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
+// Fallback component zones in 1280×900 space (used when wireframe not yet loaded)
+const FALLBACK_RECTS = [
+  { x: 0,   y: 0,   w: 1280, h: 56  },
+  { x: 120, y: 90,  w: 1040, h: 130 },
+  { x: 320, y: 250, w: 180,  h: 46  },
+  { x: 520, y: 250, w: 180,  h: 46  },
+  { x: 80,  y: 370, w: 360,  h: 210 },
+  { x: 460, y: 370, w: 360,  h: 210 },
+  { x: 840, y: 370, w: 360,  h: 210 },
+  { x: 80,  y: 190, w: 1100, h: 46  },
+  { x: 0,   y: 830, w: 1280, h: 70  },
+  { x: 160, y: 600, w: 280,  h: 44  },
+  { x: 460, y: 600, w: 360,  h: 44  },
+];
+
+function parseWireframeRects(svg: string): Array<{x:number;y:number;w:number;h:number}> {
+  const out: Array<{x:number;y:number;w:number;h:number}> = [];
+  const re = /<rect\b([^/>'"]|"[^"]*"|'[^']*')*?\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(svg)) !== null) {
+    const el = m[0];
+    const num = (attr: string) => parseFloat(el.match(new RegExp(`\\b${attr}="([^"]+)"`))?.[1] ?? '0');
+    const x = num('x'), y = num('y'), w = num('width'), h = num('height');
+    if (w > 50 && h > 18 && w < 1240 && h < 700) out.push({ x, y, w, h });
+  }
+  return out;
+}
+
 function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: {
   node: TreeNode; host: string;
   screenshotMap: Record<string, string>;
@@ -643,13 +671,24 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
   const realShot = screenshotMap[node.id];
   const realWire = wireframeMap[node.id];
 
-  // Scatter hotspot dots across the image in a deterministic 3-column grid
-  const hotspots = nodeFindings.map((f, i) => ({
-    ...f,
-    x: [15, 50, 82][i % 3],
-    y: 8 + Math.floor(i / 3) * Math.min(28, 75 / Math.max(1, Math.ceil(nodeFindings.length / 3))),
-    n: i + 1,
-  }));
+  // Use wireframe rect geometry when available; fall back to common UI zones
+  const rectPool = useMemo(() => {
+    if (realWire) {
+      const parsed = parseWireframeRects(realWire);
+      if (parsed.length >= 2) return parsed;
+    }
+    return FALLBACK_RECTS;
+  }, [realWire]);
+
+  // Map each finding to a rect from the pool (cycle if more findings than rects)
+  const hotspots = useMemo(() =>
+    nodeFindings.map((f, i) => ({
+      ...f,
+      rect: rectPool[i % rectPool.length],
+      n: i + 1,
+      sev: f.severity === 'medium' ? 'med' : f.severity,
+    })),
+  [nodeFindings, rectPool]);
 
   return (
     <div className="preview">
@@ -691,17 +730,22 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
           : realShot
             ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
             : getScreenshotForNode(node)}
-        {/* Hotspot overlay for real findings */}
+        {/* Hotspot overlay — dashed rect per finding, positioned from wireframe geometry */}
         {annotations && hotspots.length > 0 && (realShot || realWire) && (
           <div className="hotspot-layer">
             {hotspots.map(h => (
               <div
                 key={h.n}
-                className={`hs-dot hs-${h.severity === 'medium' ? 'med' : h.severity}`}
-                style={{ left: `${h.x}%`, top: `${h.y}%` }}
+                className={`hs-rect hs-${h.sev}`}
+                style={{
+                  left:   `${(h.rect.x / 1280) * 100}%`,
+                  top:    `${(h.rect.y / 900)  * 100}%`,
+                  width:  `${(h.rect.w / 1280) * 100}%`,
+                  height: `${(h.rect.h / 900)  * 100}%`,
+                }}
                 title={`#${h.n} [${h.severity}] ${h.message || h.rule}`}
               >
-                {h.n}
+                <span className="hs-rect-label">#{h.n} · {h.sev}</span>
               </div>
             ))}
           </div>

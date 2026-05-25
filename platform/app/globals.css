@@ -714,29 +714,50 @@ html[data-theme="light"] .nora-fig {
 }
 .preview-img.no-annot svg g:last-child { display: none; }
 
-/* hotspot overlay (real audit data) */
+/* hotspot overlay — dashed rect annotations */
 .hotspot-layer {
   position: absolute; inset: 0;
   pointer-events: none; z-index: 3;
 }
-.hs-dot {
+.hs-rect {
   position: absolute;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
-  color: #fff;
+  border: 1.5px dashed;
+  border-radius: 3px;
+  box-sizing: border-box;
   pointer-events: auto;
-  box-shadow: 0 2px 8px rgba(0,0,0,.45);
-  transform: translate(-50%, -50%);
   cursor: default;
-  border: 1.5px solid rgba(255,255,255,.35);
-  transition: transform .1s;
+  transition: filter .12s;
 }
-.hs-dot:hover { transform: translate(-50%, -50%) scale(1.2); }
-.hs-dot.hs-high { background: var(--sev-high); }
-.hs-dot.hs-med  { background: var(--sev-med);  }
-.hs-dot.hs-low  { background: var(--sev-low);  }
+.hs-rect:hover { filter: brightness(1.15); }
+.hs-rect.hs-high {
+  border-color: var(--sev-high);
+  background: color-mix(in oklab, var(--sev-high) 9%, transparent);
+}
+.hs-rect.hs-med {
+  border-color: var(--sev-med);
+  background: color-mix(in oklab, var(--sev-med) 9%, transparent);
+}
+.hs-rect.hs-low {
+  border-color: var(--sev-low);
+  background: color-mix(in oklab, var(--sev-low) 9%, transparent);
+}
+/* label chip at top-left corner of the rect */
+.hs-rect-label {
+  position: absolute;
+  top: 0; left: 0;
+  transform: translateY(-100%);
+  font-family: var(--font-mono);
+  font-size: 9px; font-weight: 700;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px 3px 3px 0;
+  white-space: nowrap;
+  line-height: 1.6;
+  pointer-events: none;
+}
+.hs-rect.hs-high .hs-rect-label { background: var(--sev-high); }
+.hs-rect.hs-med  .hs-rect-label { background: var(--sev-med);  }
+.hs-rect.hs-low  .hs-rect-label { background: var(--sev-low);  }
 .preview-img.no-annot .hotspot-layer { display: none; }
 
 /* severity grid */
