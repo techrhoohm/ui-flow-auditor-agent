@@ -741,6 +741,14 @@ html[data-theme="light"] .nora-fig {
   border-color: var(--sev-low);
   background: color-mix(in oklab, var(--sev-low) 9%, transparent);
 }
+.hs-rect.hs-clean {
+  border-color: var(--fg-faint);
+  background: color-mix(in oklab, var(--fg-faint) 4%, transparent);
+  border-style: dashed;
+}
+.hs-rect.hs-clean .hs-rect-label {
+  background: var(--fg-faint);
+}
 /* label chip at top-left corner of the rect */
 .hs-rect-label {
   position: absolute;

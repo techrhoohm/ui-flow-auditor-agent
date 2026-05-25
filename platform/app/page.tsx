@@ -680,15 +680,28 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
     return FALLBACK_RECTS;
   }, [realWire]);
 
-  // Map each finding to a rect from the pool (cycle if more findings than rects)
-  const hotspots = useMemo(() =>
-    nodeFindings.map((f, i) => ({
-      ...f,
-      rect: rectPool[i % rectPool.length],
-      n: i + 1,
-      sev: f.severity === 'medium' ? 'med' : f.severity,
-    })),
-  [nodeFindings, rectPool]);
+  // Build hotspot list:
+  // • findings exist  → colour-coded dashed rects (high/med/low)
+  // • no findings but real screenshot/wireframe present → neutral "clean" outlines
+  //   so component structure is always visible on captured screens
+  const hotspots = useMemo(() => {
+    if (nodeFindings.length > 0) {
+      return nodeFindings.map((f, i) => ({
+        ...f,
+        rect: rectPool[i % rectPool.length],
+        n: i + 1,
+        sev: f.severity === 'medium' ? 'med' : f.severity,
+        label: `#${i + 1} · ${f.severity === 'medium' ? 'med' : f.severity}`,
+      }));
+    }
+    // neutral outlines — show up to 5 component zones so the overlay is present
+    return rectPool.slice(0, 5).map((rect, i) => ({
+      nodeId: node.id, nodeLabel: node.label,
+      severity: 'low' as const, message: 'No issues found', rule: '',
+      rect, n: i + 1, sev: 'clean',
+      label: `zone ${i + 1}`,
+    }));
+  }, [nodeFindings, rectPool, node.id, node.label]);
 
   return (
     <div className="preview">
@@ -730,8 +743,8 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
           : realShot
             ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
             : getScreenshotForNode(node)}
-        {/* Hotspot overlay — dashed rect per finding, positioned from wireframe geometry */}
-        {annotations && hotspots.length > 0 && (realShot || realWire) && (
+        {/* Hotspot overlay — always shown on real screenshots/wireframes */}
+        {annotations && (realShot || realWire) && (
           <div className="hotspot-layer">
             {hotspots.map(h => (
               <div
@@ -743,9 +756,9 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
                   width:  `${(h.rect.w / 1280) * 100}%`,
                   height: `${(h.rect.h / 900)  * 100}%`,
                 }}
-                title={`#${h.n} [${h.severity}] ${h.message || h.rule}`}
+                title={h.sev === 'clean' ? 'Analyzed — no issues' : `#${h.n} [${h.severity}] ${h.message || h.rule}`}
               >
-                <span className="hs-rect-label">#{h.n} · {h.sev}</span>
+                <span className="hs-rect-label">{h.label}</span>
               </div>
             ))}
           </div>
@@ -1387,6 +1400,7 @@ export default function Page() {
 
     setHistoryItems(prev => [item, ...prev].slice(0, 20));
     setActiveHistory(id);
+    return id;
   }, []);
 
   /* ─── Wireframe generation (parallel, progressive) ────────────────── */
@@ -1495,7 +1509,6 @@ export default function Page() {
         }));
 
       const shots = data.screenshots || {};
-      const historyId = 'live-' + Date.now();
 
       setSession(newSession);
       setSelectedNodeId(tree.id);
@@ -1507,7 +1520,7 @@ export default function Page() {
       setCrawlProgress({ current: null, done: data.meta.pagesScanned, total: data.meta.pagesScanned });
       setShowPanel(true);
 
-      addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots);
+      const historyId = addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots);
 
       // Fire parallel AI wireframe generation for each captured page
       if (Object.keys(shots).length > 0) {
@@ -1666,11 +1679,11 @@ export default function Page() {
         };
 
         const dur = run.updatedAt && run.startedAt ? run.updatedAt - run.startedAt : Date.now() - t0;
-        addToHistory(target.url, agentSession, dur, findings, shots);
+        const agentHistoryId = addToHistory(target.url, agentSession, dur, findings, shots);
 
         // Generate AI wireframes for this target's screenshots
         if (Object.keys(shots).length > 0) {
-          generateWireframes(shots);
+          generateWireframes(shots, agentHistoryId);
         }
       }
 
