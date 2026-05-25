@@ -7,6 +7,7 @@ export type ClickableElement = {
   label: string;
   href?: string;
   bbox: { x: number; y: number; w: number; h: number };
+  borderRadius: number;
 };
 
 export type CrawlPage = {
@@ -683,66 +684,120 @@ async function visit(
 }
 
 async function collectClickableElements(page: Page): Promise<ClickableElement[]> {
-  return page.evaluate((): ClickableElement[] => {
-    const out: ClickableElement[] = [];
+  return page.evaluate(() => {
+    interface RawEl {
+      type: 'nav' | 'button' | 'link' | 'card';
+      bbox: { x: number; y: number; w: number; h: number };
+      borderRadius: number;
+      href?: string;
+    }
+
+    function visible(r: DOMRect): boolean {
+      return r.width >= 10 && r.height >= 10
+        && r.top < 900 && r.bottom > 0
+        && r.left < 1280 && r.right > 0;
+    }
+    function snap(r: DOMRect) {
+      return {
+        x: Math.round(r.left), y: Math.round(r.top),
+        w: Math.round(r.width), h: Math.round(r.height),
+      };
+    }
+    function getRadius(el: HTMLElement): number {
+      try {
+        const s = window.getComputedStyle(el);
+        return Math.round(parseFloat(s.borderRadius || s.borderTopLeftRadius || '0') || 0);
+      } catch { return 0; }
+    }
+
+    const raw: RawEl[] = [];
+    const posKey = (b: { x: number; y: number; w: number; h: number }) =>
+      `${b.x},${b.y},${b.w},${b.h}`;
     const seen = new Set<string>();
 
-    function addEl(
-      type: ClickableElement['type'],
-      el: HTMLElement,
-      labelText: string,
-      href?: string
-    ) {
+    function add(type: RawEl['type'], el: HTMLElement, href?: string) {
       const r = el.getBoundingClientRect();
-      if (r.width < 8 || r.height < 8) return;
-      // Only capture elements in the top 900px (wireframe/hotspot coordinate space)
-      if (r.top > 900 || r.bottom < 0 || r.left > 1280 || r.right < 0) return;
-      const key = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const label = (labelText || '').trim().slice(0, 60);
-      out.push({
-        type, label,
-        ...(href ? { href } : {}),
-        bbox: {
-          x: Math.round(r.left), y: Math.round(r.top),
-          w: Math.round(r.width), h: Math.round(r.height),
-        },
-      });
+      if (!visible(r)) return;
+      const b = snap(r);
+      const k = posKey(b);
+      if (seen.has(k)) return;
+      seen.add(k);
+      raw.push({ type, bbox: b, borderRadius: getRadius(el), href });
     }
 
-    // Nav links first (highest priority)
+    // 1. Buttons — semantic + ARIA (highest priority)
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [role="button"], input[type="submit"], input[type="button"], input[type="reset"]'
+    ))) add('button', el);
+
+    // 2. Top-level nav items only — direct children of nav/header to avoid dropdown spam
     for (const el of Array.from(document.querySelectorAll<HTMLAnchorElement>(
-      'nav a, header a, [role="navigation"] a, .nav a, .navbar a, .header a, .nav-link, .menu-item a'
-    ))) {
-      addEl('nav', el, el.textContent ?? '', el.href || undefined);
+      'nav > a, nav > ul > li > a, nav > div > a, header > a, header > nav > a,' +
+      'header > nav > ul > li > a, [role="navigation"] > a, [role="navigation"] > ul > li > a'
+    ))) add('nav', el as HTMLElement, (el as HTMLAnchorElement).href);
+
+    // 3. Wider net for nav but max depth 3 inside nav/header containers
+    for (const el of Array.from(document.querySelectorAll<HTMLAnchorElement>('nav a, header a'))) {
+      // Only first-visible row (top 80px of page, or any nav link with large enough target)
+      const r = el.getBoundingClientRect();
+      if (r.height >= 32 || r.top < 80) add('nav', el as HTMLElement, (el as HTMLAnchorElement).href);
     }
 
-    // Buttons
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>(
-      'button, [role="button"], input[type="submit"], input[type="button"]'
-    ))) {
-      const label = (el as HTMLInputElement).value || el.textContent || el.getAttribute('aria-label') || '';
-      addEl('button', el, label);
+    // 4. Click-handler non-anchor elements (cards, tiles, custom widgets)
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
+      const tag = el.tagName.toUpperCase();
+      if (tag === 'A' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'NAV'
+        || tag === 'HEADER' || tag === 'BODY' || tag === 'HTML' || tag === 'MAIN'
+        || tag === 'SECTION' || tag === 'ARTICLE' || tag === 'DIV' && el.children.length > 6) continue;
+      try {
+        const s = window.getComputedStyle(el);
+        if (s.cursor !== 'pointer') continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 20 || r.height < 16 || r.width > 900 || r.height > 400) continue;
+        add('card', el);
+      } catch { /* skip */ }
     }
 
-    // Links (anchors not already captured as nav)
+    // 5. Remaining links (standalone anchor links, not nav)
     for (const el of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
-      addEl('link', el, el.textContent ?? '', el.href || undefined);
+      const r = el.getBoundingClientRect();
+      // Only block-ish links (not inline text links — width > 60 and height >= 20)
+      if (r.width >= 60 && r.height >= 20) add('link', el as HTMLElement, (el as HTMLAnchorElement).href);
     }
 
-    // Clickable cards / containers
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>(
-      '[onclick], [data-href], [data-url], [data-link]'
-    ))) {
-      if (el.tagName === 'A' || el.tagName === 'BUTTON') continue;
-      const heading = el.querySelector<HTMLElement>(
-        'h1,h2,h3,h4,[class*="title"],[class*="heading"],[class*="name"]'
-      );
-      addEl('card', el, el.getAttribute('aria-label') || heading?.textContent || '');
-    }
+    // Deduplicate: if element A fully contains element B (and B is meaningfully smaller), drop A
+    const deduped = raw.filter((a, i) => {
+      for (let j = 0; j < raw.length; j++) {
+        if (i === j) continue;
+        const b = raw[j];
+        const areaA = a.bbox.w * a.bbox.h;
+        const areaB = b.bbox.w * b.bbox.h;
+        if (areaB >= areaA * 0.75) continue; // b not meaningfully smaller
+        // Check b is fully inside a
+        if (b.bbox.x >= a.bbox.x && b.bbox.y >= a.bbox.y
+          && b.bbox.x + b.bbox.w <= a.bbox.x + a.bbox.w
+          && b.bbox.y + b.bbox.h <= a.bbox.y + a.bbox.h) {
+          return false; // a is a parent wrapper; drop it
+        }
+      }
+      return true;
+    });
 
-    return out.slice(0, 40);
+    // Cap by type and interleave so visual isn't one-color dominated
+    const byType = {
+      button: deduped.filter(e => e.type === 'button').slice(0, 10),
+      nav:    deduped.filter(e => e.type === 'nav').slice(0, 8),
+      link:   deduped.filter(e => e.type === 'link').slice(0, 8),
+      card:   deduped.filter(e => e.type === 'card').slice(0, 5),
+    };
+
+    return [...byType.button, ...byType.nav, ...byType.link, ...byType.card].map(e => ({
+      type: e.type,
+      label: e.type === 'button' ? 'btn' : e.type === 'nav' ? 'nav' : e.type === 'link' ? 'lnk' : 'crd',
+      href: e.href,
+      bbox: e.bbox,
+      borderRadius: e.borderRadius,
+    }));
   }).catch(() => []);
 }
 

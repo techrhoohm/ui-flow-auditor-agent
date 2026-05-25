@@ -680,10 +680,11 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, no
     if (nodeElements.length > 0) {
       return nodeElements.map((el, i) => ({
         nodeId: node.id, nodeLabel: node.label,
-        severity: 'low' as const, message: el.label || el.type, rule: el.href || '',
+        severity: 'low' as const, message: el.label, rule: el.href || '',
         rect: el.bbox,
+        borderRadius: el.borderRadius ?? 0,
         n: i + 1, sev: el.type,
-        label: el.label ? `${el.type} · ${el.label.slice(0, 20)}` : el.type,
+        label: el.label, // 'btn' | 'nav' | 'lnk' | 'crd'
       }));
     }
     // Accessibility/UX findings mapped to wireframe geometry
@@ -698,6 +699,7 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, no
       return nodeFindings.map((f, i) => ({
         ...f,
         rect: rectPool[i % rectPool.length],
+        borderRadius: 0,
         n: i + 1,
         sev: f.severity === 'medium' ? 'med' : f.severity,
         label: `#${i + 1} · ${f.severity === 'medium' ? 'med' : f.severity}`,
@@ -707,7 +709,7 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, no
     return rectPool.slice(0, 5).map((rect, i) => ({
       nodeId: node.id, nodeLabel: node.label,
       severity: 'low' as const, message: 'No issues found', rule: '',
-      rect, n: i + 1, sev: 'clean',
+      rect, borderRadius: 0, n: i + 1, sev: 'clean',
       label: `zone ${i + 1}`,
     }));
   }, [nodeElements, nodeFindings, realWire, node.id, node.label]);
@@ -764,8 +766,9 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, no
                   top:    `${(h.rect.y / 900)  * 100}%`,
                   width:  `${(h.rect.w / 1280) * 100}%`,
                   height: `${(h.rect.h / 900)  * 100}%`,
+                  borderRadius: h.borderRadius > 0 ? `${h.borderRadius}px` : undefined,
                 }}
-                title={h.sev === 'clean' ? 'Analyzed — no issues' : `#${h.n} [${h.severity}] ${h.message || h.rule}`}
+                title={h.sev === 'clean' ? 'Analyzed — no issues' : `[${h.sev}] ${h.message || h.rule}`}
               >
                 <span className="hs-rect-label">{h.label}</span>
               </div>

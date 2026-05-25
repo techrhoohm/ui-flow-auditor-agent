@@ -714,7 +714,7 @@ html[data-theme="light"] .nora-fig {
 }
 .preview-img.no-annot svg g:last-child { display: none; }
 
-/* hotspot overlay — dashed rect annotations */
+/* hotspot overlay — subtle dashed outlines, no fill */
 .hotspot-layer {
   position: absolute; inset: 0;
   pointer-events: none; z-index: 3;
@@ -722,70 +722,45 @@ html[data-theme="light"] .nora-fig {
 .hs-rect {
   position: absolute;
   border: 1.5px dashed;
-  border-radius: 3px;
+  background: transparent;
   box-sizing: border-box;
   pointer-events: auto;
   cursor: default;
-  transition: filter .12s;
+  transition: background .12s;
 }
-.hs-rect:hover { filter: brightness(1.15); }
-.hs-rect.hs-high {
-  border-color: var(--sev-high);
-  background: color-mix(in oklab, var(--sev-high) 9%, transparent);
-}
-.hs-rect.hs-med {
-  border-color: var(--sev-med);
-  background: color-mix(in oklab, var(--sev-med) 9%, transparent);
-}
-.hs-rect.hs-low {
-  border-color: var(--sev-low);
-  background: color-mix(in oklab, var(--sev-low) 9%, transparent);
-}
-.hs-rect.hs-clean {
-  border-color: var(--fg-faint);
-  background: color-mix(in oklab, var(--fg-faint) 4%, transparent);
-  border-style: dashed;
-}
-.hs-rect.hs-clean .hs-rect-label { background: var(--fg-faint); }
+/* hover: brief ghost fill so element stands out */
+.hs-rect:hover { background: color-mix(in oklab, currentColor 6%, transparent); }
 
-/* Element-type hotspots from crawler */
-.hs-rect.hs-nav {
-  border-color: #6366f1;
-  background: color-mix(in oklab, #6366f1 8%, transparent);
+/* Severity-based (findings) */
+.hs-rect.hs-high { border-color: color-mix(in oklab, var(--sev-high) 70%, transparent); color: var(--sev-high); }
+.hs-rect.hs-med  { border-color: color-mix(in oklab, var(--sev-med)  70%, transparent); color: var(--sev-med);  }
+.hs-rect.hs-low  { border-color: color-mix(in oklab, var(--sev-low)  70%, transparent); color: var(--sev-low);  }
+.hs-rect.hs-clean {
+  border-color: color-mix(in oklab, var(--fg-faint) 50%, transparent);
+  color: var(--fg-faint);
+  border-style: dotted;
 }
-.hs-rect.hs-nav .hs-rect-label { background: #6366f1; }
-.hs-rect.hs-button {
-  border-color: #10b981;
-  background: color-mix(in oklab, #10b981 8%, transparent);
-}
-.hs-rect.hs-button .hs-rect-label { background: #10b981; }
-.hs-rect.hs-link {
-  border-color: #3b82f6;
-  background: color-mix(in oklab, #3b82f6 7%, transparent);
-}
-.hs-rect.hs-link .hs-rect-label { background: #3b82f6; }
-.hs-rect.hs-card {
-  border-color: #f59e0b;
-  background: color-mix(in oklab, #f59e0b 8%, transparent);
-}
-.hs-rect.hs-card .hs-rect-label { background: #f59e0b; }
-/* label chip at top-left corner of the rect */
+
+/* Element-type hotspots — each a distinct subtle hue */
+.hs-rect.hs-button { border-color: rgba(16,185,129,.6);  color: #10b981; } /* green  */
+.hs-rect.hs-nav    { border-color: rgba(99,102,241,.55); color: #6366f1; } /* indigo */
+.hs-rect.hs-link   { border-color: rgba(59,130,246,.5);  color: #3b82f6; } /* blue   */
+.hs-rect.hs-card   { border-color: rgba(245,158,11,.55); color: #f59e0b; } /* amber  */
+
+/* tiny inline type badge — sits inside the top-left corner */
 .hs-rect-label {
   position: absolute;
-  top: 0; left: 0;
-  transform: translateY(-100%);
+  top: 2px; left: 2px;
   font-family: var(--font-mono);
-  font-size: 9px; font-weight: 700;
-  color: #fff;
-  padding: 2px 6px;
-  border-radius: 3px 3px 3px 0;
+  font-size: 8px; font-weight: 700;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.75;
   white-space: nowrap;
-  line-height: 1.6;
   pointer-events: none;
+  letter-spacing: .02em;
 }
-.hs-rect.hs-high .hs-rect-label { background: var(--sev-high); }
-.hs-rect.hs-med  .hs-rect-label { background: var(--sev-med);  }
-.hs-rect.hs-low  .hs-rect-label { background: var(--sev-low);  }
+
 .preview-img.no-annot .hotspot-layer { display: none; }
 
 /* severity grid */
