@@ -714,6 +714,31 @@ html[data-theme="light"] .nora-fig {
 }
 .preview-img.no-annot svg g:last-child { display: none; }
 
+/* hotspot overlay (real audit data) */
+.hotspot-layer {
+  position: absolute; inset: 0;
+  pointer-events: none; z-index: 3;
+}
+.hs-dot {
+  position: absolute;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  color: #fff;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0,0,0,.45);
+  transform: translate(-50%, -50%);
+  cursor: default;
+  border: 1.5px solid rgba(255,255,255,.35);
+  transition: transform .1s;
+}
+.hs-dot:hover { transform: translate(-50%, -50%) scale(1.2); }
+.hs-dot.hs-high { background: var(--sev-high); }
+.hs-dot.hs-med  { background: var(--sev-med);  }
+.hs-dot.hs-low  { background: var(--sev-low);  }
+.preview-img.no-annot .hotspot-layer { display: none; }
+
 /* severity grid */
 .sev-grid {
   display: grid;
@@ -1367,6 +1392,46 @@ html[data-theme="light"] .nora-fig {
 .fm-card-meta { flex: 1; min-width: 0; }
 .fm-card-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
 .fm-card-sub { font-size: 11.5px; color: var(--fg-muted); margin-top: 2px; line-height: 1.4; }
+
+/* FolderMenu — per-source form */
+.fm-form {
+  padding: 18px 20px 20px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.fm-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--fg-faint); font-weight: 600;
+}
+.fm-input {
+  height: 38px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-sunk); color: var(--fg);
+  font: inherit; font-size: 13px; outline: none;
+  transition: border-color .12s, box-shadow .12s;
+}
+.fm-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.fm-hint {
+  font-size: 11.5px; color: var(--fg-muted); line-height: 1.55; margin: 0;
+}
+.fm-hint code {
+  font-family: var(--font-mono); font-size: 10.5px;
+  background: var(--bg-sunk); padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.fm-submit {
+  justify-content: center; margin-top: 4px;
+}
+.fm-back-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 0; color: var(--fg-muted);
+  font: inherit; font-size: 11.5px; cursor: pointer; padding: 0;
+  transition: color .12s;
+}
+.fm-back-btn:hover { color: var(--fg); }
 
 /* === Agent panel =========================================================== */
 .agent-panel {

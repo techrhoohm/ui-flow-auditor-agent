@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import sharp from "sharp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,14 +56,26 @@ export async function POST(req: Request) {
   }
 
   // Strip the data URL prefix to get raw base64
-  const base64 = body.screenshot.replace(/^data:image\/\w+;base64,/, "");
-  // Detect media type
-  const mediaTypeMatch = body.screenshot.match(/^data:(image\/\w+);base64,/);
-  const mediaType = (mediaTypeMatch?.[1] ?? "image/jpeg") as
-    | "image/jpeg"
-    | "image/png"
-    | "image/gif"
-    | "image/webp";
+  const rawBase64 = body.screenshot.replace(/^data:image\/\w+;base64,/, "");
+
+  // Crop to exactly 1280×900 so Claude sees only the above-fold viewport
+  // that matches the wireframe viewBox — avoids distortion on tall full-page shots
+  let base64 = rawBase64;
+  try {
+    const buf = Buffer.from(rawBase64, "base64");
+    const meta = await sharp(buf).metadata();
+    const cropH = Math.min(meta.height ?? 900, 900);
+    const cropW = meta.width ?? 1280;
+    const cropped = await sharp(buf)
+      .extract({ left: 0, top: 0, width: cropW, height: cropH })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+    base64 = cropped.toString("base64");
+  } catch {
+    // fall back to raw if sharp fails
+  }
+
+  const mediaType = "image/jpeg";
 
   const client = new Anthropic({ apiKey });
 

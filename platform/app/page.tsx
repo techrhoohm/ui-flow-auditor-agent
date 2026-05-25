@@ -631,16 +631,25 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
-function PreviewCard({ node, host, screenshotMap, wireframeMap }: {
+function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: {
   node: TreeNode; host: string;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
+  nodeFindings: RealFinding[];
 }) {
   const [view, setView] = useState<'screenshot' | 'wireframe'>('screenshot');
   const [annotations, setAnnotations] = useState(true);
   const url = 'https://' + host + (node.path === '/' ? '' : node.path);
   const realShot = screenshotMap[node.id];
   const realWire = wireframeMap[node.id];
+
+  // Scatter hotspot dots across the image in a deterministic 3-column grid
+  const hotspots = nodeFindings.map((f, i) => ({
+    ...f,
+    x: [15, 50, 82][i % 3],
+    y: 8 + Math.floor(i / 3) * Math.min(28, 75 / Math.max(1, Math.ceil(nodeFindings.length / 3))),
+    n: i + 1,
+  }));
 
   return (
     <div className="preview">
@@ -682,6 +691,21 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap }: {
           : realShot
             ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
             : getScreenshotForNode(node)}
+        {/* Hotspot overlay for real findings */}
+        {annotations && hotspots.length > 0 && (realShot || realWire) && (
+          <div className="hotspot-layer">
+            {hotspots.map(h => (
+              <div
+                key={h.n}
+                className={`hs-dot hs-${h.severity === 'medium' ? 'med' : h.severity}`}
+                style={{ left: `${h.x}%`, top: `${h.y}%` }}
+                title={`#${h.n} [${h.severity}] ${h.message || h.rule}`}
+              >
+                {h.n}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="preview-overlay">
           <span className="ovl-chip">
             <span className="live-dot go"/>
@@ -767,7 +791,7 @@ function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMa
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} nodeFindings={nodeRealFindings}/>
 
             <div className="sev-grid">
               <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
@@ -897,37 +921,181 @@ function EmptyState({ title, body, cta }: { title: string; body: string; cta: st
 
 /* ─────────────────────────── FolderMenu ──────────────────────────────── */
 
-function FolderMenu({ onClose }: { onClose: () => void }) {
-  const sources = [
-    { id: 'macos',   name: 'macOS',   sub: 'Capture native windows via Accessibility API' },
-    { id: 'windows', name: 'Windows', sub: 'Hook UI Automation for any app' },
-    { id: 'ios',     name: 'iOS',     sub: 'Mirror device via Xcode bridge' },
-    { id: 'android', name: 'Android', sub: 'ADB bridge — emulator or physical device' },
-    { id: 'figma',   name: 'Figma',   sub: 'Audit prototypes & frames from a file URL' },
-    { id: 'folder',  name: 'Folder',  sub: 'Local directory of screenshots or HTML' },
+interface FolderMenuProps {
+  onClose: () => void;
+  onStartWebAudit: (url: string) => void;
+}
+
+function FolderMenu({ onClose, onStartWebAudit }: FolderMenuProps) {
+  const [active, setActive] = useState<string | null>(null);
+  const [webUrl, setWebUrl] = useState('');
+  const [figmaUrl, setFigmaUrl] = useState('');
+  const [iosInput, setIosInput] = useState('');
+  const [androidInput, setAndroidInput] = useState('');
+  const macosRef = useRef<HTMLInputElement>(null);
+  const windowsRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+
+  const SOURCES = [
+    { id: 'web',     icon: <IcGlobe w={18} h={18}/>,  name: 'Web URL',  sub: 'Audit any public website by URL' },
+    { id: 'macos',   icon: <IcCamera w={18} h={18}/>, name: 'macOS',    sub: 'Select a .app bundle from Finder' },
+    { id: 'windows', icon: <IcLayers w={18} h={18}/>, name: 'Windows',  sub: 'Pick an .exe via file picker' },
+    { id: 'ios',     icon: <IcAgent w={18} h={18}/>,  name: 'iOS',      sub: 'Mirror device via Xcode bridge' },
+    { id: 'android', icon: <IcTarget w={18} h={18}/>, name: 'Android',  sub: 'ADB bridge — emulator or physical device' },
+    { id: 'figma',   icon: <IcSpark w={18} h={18}/>,  name: 'Figma',    sub: 'Audit prototypes from a Figma file URL' },
+    { id: 'folder',  icon: <IcFolder w={18} h={18}/>, name: 'Folder',   sub: 'Local directory of screenshots or HTML' },
   ];
+
+  const src = SOURCES.find(s => s.id === active);
+
+  function handleFileChosen(e: React.ChangeEvent<HTMLInputElement>, label: string) {
+    const name = e.target.files?.[0]?.name || e.target.files?.[0]?.webkitRelativePath || 'selected';
+    alert(`${label} selected: ${name}\n(backend integration coming soon)`);
+    onClose();
+  }
+
+  function renderForm() {
+    switch (active) {
+      case 'web':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">Website URL</label>
+            <input
+              className="fm-input" autoFocus
+              placeholder="https://example.com"
+              value={webUrl} onChange={e => setWebUrl(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && webUrl.trim()) { onStartWebAudit(webUrl.trim()); onClose(); } }}
+            />
+            <p className="fm-hint">Enter any public URL — press Enter or click Start Audit.</p>
+            <button
+              className="btn btn-primary fm-submit"
+              disabled={!webUrl.trim()}
+              onClick={() => { onStartWebAudit(webUrl.trim()); onClose(); }}
+            >
+              <IcPlay w={11} h={11}/> Start audit
+            </button>
+          </div>
+        );
+      case 'macos':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">macOS app bundle</label>
+            <input ref={macosRef} type="file" accept=".app" style={{ display: 'none' }} onChange={e => handleFileChosen(e, 'App')}/>
+            <p className="fm-hint">Opens Finder — navigate to <code>/Applications</code> and select any <code>.app</code> bundle.</p>
+            <button className="btn btn-primary fm-submit" onClick={() => macosRef.current?.click()}>
+              <IcFolder w={13} h={13}/> Browse in Finder…
+            </button>
+          </div>
+        );
+      case 'windows':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">Windows executable</label>
+            <input ref={windowsRef} type="file" accept=".exe,.msi" style={{ display: 'none' }} onChange={e => handleFileChosen(e, 'Executable')}/>
+            <p className="fm-hint">Opens the file picker — select an <code>.exe</code> or <code>.msi</code> to audit.</p>
+            <button className="btn btn-primary fm-submit" onClick={() => windowsRef.current?.click()}>
+              <IcFolder w={13} h={13}/> Browse…
+            </button>
+          </div>
+        );
+      case 'ios':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">Device IP or bundle ID</label>
+            <input
+              className="fm-input" autoFocus
+              placeholder="192.168.1.x  or  com.company.app"
+              value={iosInput} onChange={e => setIosInput(e.target.value)}
+            />
+            <p className="fm-hint">Connect your iPhone/iPad over the same Wi-Fi network and enter its IP, or paste the app bundle ID for Xcode simulator capture.</p>
+            <button className="btn btn-primary fm-submit" disabled={!iosInput.trim()} onClick={onClose}>
+              <IcPlay w={11} h={11}/> Connect device
+            </button>
+          </div>
+        );
+      case 'android':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">ADB device serial or package name</label>
+            <input
+              className="fm-input" autoFocus
+              placeholder="emulator-5554  or  com.company.app"
+              value={androidInput} onChange={e => setAndroidInput(e.target.value)}
+            />
+            <p className="fm-hint">Run <code>adb devices</code> to find the serial. For physical devices, enable USB debugging first.</p>
+            <button className="btn btn-primary fm-submit" disabled={!androidInput.trim()} onClick={onClose}>
+              <IcPlay w={11} h={11}/> Connect device
+            </button>
+          </div>
+        );
+      case 'figma':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">Figma file URL</label>
+            <input
+              className="fm-input" autoFocus
+              placeholder="https://www.figma.com/file/…"
+              value={figmaUrl} onChange={e => setFigmaUrl(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && figmaUrl.trim() && onClose()}
+            />
+            <p className="fm-hint">Paste a Figma file or prototype link. Requires Figma OAuth in settings.</p>
+            <button className="btn btn-primary fm-submit" disabled={!figmaUrl.trim()} onClick={onClose}>
+              <IcPlay w={11} h={11}/> Audit prototype
+            </button>
+          </div>
+        );
+      case 'folder':
+        return (
+          <div className="fm-form">
+            <label className="fm-label">Local folder</label>
+            {/* webkitdirectory opens a folder picker on macOS/Windows */}
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <input ref={folderRef} type="file" {...({ webkitdirectory: '' } as any)} style={{ display: 'none' }} onChange={e => handleFileChosen(e, 'Folder')}/>
+            <p className="fm-hint">Select a local folder containing screenshots, HTML files, or a Flutter project for static analysis.</p>
+            <button className="btn btn-primary fm-submit" onClick={() => folderRef.current?.click()}>
+              <IcFolder w={13} h={13}/> Choose folder…
+            </button>
+          </div>
+        );
+      default:
+        return null;
+    }
+  }
+
   return (
     <div className="fm-backdrop" onClick={onClose}>
       <div className="fm-panel" onClick={e => e.stopPropagation()}>
         <div className="fm-head">
           <div>
-            <div className="fm-kicker">Audit a native flow</div>
-            <div className="fm-title">Pick a source</div>
+            {active
+              ? <button className="fm-back-btn" onClick={() => setActive(null)}>
+                  <IcChevronRight w={12} h={12} style={{ transform: 'rotate(180deg)' }}/> Back
+                </button>
+              : <div className="fm-kicker">Audit a flow</div>}
+            <div className="fm-title" style={{ marginTop: active ? 4 : 2 }}>
+              {src ? src.name : 'Pick a source'}
+            </div>
+            {src && <div className="fm-kicker" style={{ marginTop: 3, textTransform: 'none', letterSpacing: 0 }}>{src.sub}</div>}
           </div>
           <button className="rp-close" onClick={onClose}><IcClose w={14} h={14}/></button>
         </div>
-        <div className="fm-grid">
-          {sources.map(s => (
-            <button key={s.id} className="fm-card" onClick={onClose}>
-              <div className="fm-icon"><IcFolder w={18} h={18}/></div>
-              <div className="fm-card-meta">
-                <div className="fm-card-title">{s.name}</div>
-                <div className="fm-card-sub">{s.sub}</div>
-              </div>
-              <IcChevronRight w={14} h={14} strokeWidth={1.5}/>
-            </button>
-          ))}
-        </div>
+
+        {active
+          ? renderForm()
+          : (
+            <div className="fm-grid">
+              {SOURCES.map(s => (
+                <button key={s.id} className="fm-card" onClick={() => setActive(s.id)}>
+                  <div className="fm-icon">{s.icon}</div>
+                  <div className="fm-card-meta">
+                    <div className="fm-card-title">{s.name}</div>
+                    <div className="fm-card-sub">{s.sub}</div>
+                  </div>
+                  <IcChevronRight w={14} h={14} strokeWidth={1.5}/>
+                </button>
+              ))}
+            </div>
+          )}
       </div>
     </div>
   );
@@ -1094,6 +1262,8 @@ export default function Page() {
 
   // Session store: historyId → full session data (for restoration)
   const sessionStoreRef = useRef<Map<string, StoredSession>>(new Map());
+  // Becomes true after IDB is loaded so the persist effect doesn't save mock data
+  const idbLoadedRef = useRef(false);
 
   const initial = useMemo<Session>(() => ({
     host: 'elevenlabs.io', label: 'ElevenLabs', sessionId: 's0', tree: SITE_TREE,
@@ -1120,8 +1290,15 @@ export default function Page() {
       for (const { key, value } of allSessions) {
         sessionStoreRef.current.set(key, value);
       }
+      idbLoadedRef.current = true;
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist historyItems to IDB whenever they change (skip initial mock-data render)
+  useEffect(() => {
+    if (!idbLoadedRef.current) return;
+    dbSet('audit-history', 'history-items', historyItems).catch(console.error);
+  }, [historyItems]);
 
   const onToggleCollapse = (id: string) => {
     setCollapsedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
@@ -1164,12 +1341,7 @@ export default function Page() {
     // Persist session to IDB immediately
     dbSet('canvas-session', id, storedSession).catch(() => {});
 
-    setHistoryItems(prev => {
-      const next = [item, ...prev].slice(0, 20);
-      // Persist updated list to IDB
-      dbSet('audit-history', 'history-items', next).catch(() => {});
-      return next;
-    });
+    setHistoryItems(prev => [item, ...prev].slice(0, 20));
     setActiveHistory(id);
   }, []);
 
@@ -1205,7 +1377,7 @@ export default function Page() {
 
   /* ─── Real URL audit ──────────────────────────────────────────────── */
 
-  const startAudit = useCallback(async () => {
+  const startAudit = useCallback(async (targetUrl?: string) => {
     if (isAuditing) return;
     if (auditAbortRef.current) auditAbortRef.current.cancelled = true;
     const token = { cancelled: false };
@@ -1220,9 +1392,11 @@ export default function Page() {
     setWireframeMap({});
 
     const t0 = Date.now();
+    const auditUrl = targetUrl ?? url;
+    if (targetUrl) setUrl(targetUrl);
 
     // Optimistic: show root node crawling immediately
-    const rawHost = extractHost(url);
+    const rawHost = extractHost(auditUrl);
     const optimisticTree: TreeNode = {
       id: 'opt-root', tag: 'Entry', label: rawHost, path: '/', status: 'crawling',
       defects: { ux: 0, ui: 0, a11y: 0 }, children: [],
@@ -1237,7 +1411,7 @@ export default function Page() {
     setShowPanel(false);
 
     try {
-      const canonicalUrl = url.trim().startsWith('http') ? url.trim() : 'https://' + url.trim();
+      const canonicalUrl = auditUrl.trim().startsWith('http') ? auditUrl.trim() : 'https://' + auditUrl.trim();
       const res = await fetch('/api/audit/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1302,7 +1476,7 @@ export default function Page() {
       setAuditError(msg);
 
       // Fallback: use mock tree so canvas isn't empty
-      const fallback = makeTreeForUrl(url);
+      const fallback = makeTreeForUrl(auditUrl);
       setSession(fallback as Session);
       setSelectedNodeId(fallback.tree.id);
       setDiscoveredIds(null);
@@ -1563,7 +1737,7 @@ export default function Page() {
               />
             : null}
       </div>
-      {folderOpen && <FolderMenu onClose={() => setFolderOpen(false)}/>}
+      {folderOpen && <FolderMenu onClose={() => setFolderOpen(false)} onStartWebAudit={u => { setFolderOpen(false); startAudit(u); }}/>}
     </div>
   );
 }
