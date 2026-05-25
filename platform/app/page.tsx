@@ -12,6 +12,7 @@ import { getWireframeForNode } from '@/components/canvas/wireframes';
 import type { TreeNode, HistoryItem, AgentSite } from '@/lib/prototype-data';
 import { SITE_TREE, HISTORY, FINDINGS, AGENT_RUN } from '@/lib/prototype-data';
 import { makeTreeForUrl, bfsOrder, extractHost } from '@/lib/prototype-crawl';
+import { dbGet, dbSet, dbGetAll } from '@/lib/db';
 
 /* ─────────────────────────── local types ─────────────────────────────── */
 
@@ -234,6 +235,7 @@ function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFold
           />
           <span className="kbd">⌘ K</span>
         </label>
+        <button className="btn btn-icon url-add-btn" onClick={onFolderMenu} title="Add audit source"><IcPlus w={13} h={13}/></button>
         {auditError && <span className="audit-error-chip" title={auditError}>⚠ Failed</span>}
         <button className="btn btn-icon" onClick={onFolderMenu} title="Audit a local flow"><IcFolder w={14} h={14}/></button>
         <div className="btn-split"><button>Recent <IcCaret w={12} h={12} className="caret"/></button></div>
@@ -1107,6 +1109,20 @@ export default function Page() {
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
 
+  // Load persisted history + sessions from IndexedDB on mount
+  useEffect(() => {
+    (async () => {
+      const [savedItems, allSessions] = await Promise.all([
+        dbGet<HistoryItem[]>('audit-history', 'history-items'),
+        dbGetAll<StoredSession>('canvas-session'),
+      ]);
+      if (savedItems && savedItems.length > 0) setHistoryItems(savedItems);
+      for (const { key, value } of allSessions) {
+        sessionStoreRef.current.set(key, value);
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onToggleCollapse = (id: string) => {
     setCollapsedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   };
@@ -1137,15 +1153,24 @@ export default function Page() {
       badges,
     };
 
-    setHistoryItems(prev => [item, ...prev]);
-    setActiveHistory(id);
-
-    sessionStoreRef.current.set(id, {
+    const storedSession: StoredSession = {
       session: newSession,
       screenshotMap: shots,
       wireframeMap: {},
       realFindings: findings,
+    };
+    sessionStoreRef.current.set(id, storedSession);
+
+    // Persist session to IDB immediately
+    dbSet('canvas-session', id, storedSession).catch(() => {});
+
+    setHistoryItems(prev => {
+      const next = [item, ...prev].slice(0, 20);
+      // Persist updated list to IDB
+      dbSet('audit-history', 'history-items', next).catch(() => {});
+      return next;
     });
+    setActiveHistory(id);
   }, []);
 
   /* ─── Wireframe generation (parallel, progressive) ────────────────── */
@@ -1165,7 +1190,11 @@ export default function Page() {
             const next = { ...prev, [nodeId]: svg };
             if (historyId) {
               const stored = sessionStoreRef.current.get(historyId);
-              if (stored) sessionStoreRef.current.set(historyId, { ...stored, wireframeMap: next });
+              if (stored) {
+                const updated = { ...stored, wireframeMap: next };
+                sessionStoreRef.current.set(historyId, updated);
+                dbSet('canvas-session', historyId, updated).catch(() => {});
+              }
             }
             return next;
           });
