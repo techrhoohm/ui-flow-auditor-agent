@@ -588,7 +588,10 @@ html[data-theme="light"] .nora-fig {
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   border: 0; background: none; cursor: pointer;
   padding: 12px 0;
@@ -600,6 +603,7 @@ html[data-theme="light"] .nora-fig {
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
   transition: color .12s;
 }
 .tab:hover { color: var(--fg); }
