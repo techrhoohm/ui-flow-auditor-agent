@@ -2,6 +2,13 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { type Browser, type BrowserContext, type Page } from "playwright";
 import { launchBrowser } from "./browser";
 
+export type ClickableElement = {
+  type: 'nav' | 'button' | 'link' | 'card';
+  label: string;
+  href?: string;
+  bbox: { x: number; y: number; w: number; h: number };
+};
+
 export type CrawlPage = {
   id: string;
   url: string;
@@ -10,6 +17,7 @@ export type CrawlPage = {
   parentId: string | null;
   screenshot: string | null;
   findings: CrawlFinding[];
+  elements: ClickableElement[];
 };
 
 export type CrawlFinding = {
@@ -219,6 +227,7 @@ export async function crawlSite(
           parentId: next.parentId,
           screenshot: result.screenshot,
           findings: result.findings,
+          elements: result.elements,
         };
         pages.push(crawlPage);
         if (opts.onPage) await opts.onPage(crawlPage, pages.length);
@@ -250,6 +259,7 @@ export async function crawlSite(
               line: 1,
             },
           ],
+          elements: [],
         });
         if (next.parentId) {
           edges.push({ source: next.parentId, target: nodeId });
@@ -457,7 +467,7 @@ async function capturePageState(
   page: Page,
   url: string,
   timeoutMs: number
-): Promise<Omit<CrawlPage, "id" | "depth" | "parentId"> | null> {
+): Promise<Omit<CrawlPage, "id" | "depth" | "parentId" | "parentId"> | null> {
   try {
     const title = (await page.title()) || "(untitled)";
     const finalUrl = page.url() || url;
@@ -496,9 +506,12 @@ async function capturePageState(
       }
     }
 
-    const findings = await collectFindings(page, timeoutMs);
+    const [findings, elements] = await Promise.all([
+      collectFindings(page, timeoutMs),
+      collectClickableElements(page),
+    ]);
 
-    return { url: finalUrl, title, screenshot, findings };
+    return { url: finalUrl, title, screenshot, findings, elements };
   } catch {
     return null;
   }
@@ -526,6 +539,7 @@ async function visit(
   screenshot: string | null;
   sameOriginLinks: string[];
   findings: CrawlFinding[];
+  elements: ClickableElement[];
 }> {
   page.setDefaultTimeout(timeoutMs);
   const origin = new URL(url).origin;
@@ -591,6 +605,7 @@ async function visit(
           line: 1,
         },
       ],
+      elements: [],
     };
   }
 
@@ -659,9 +674,76 @@ async function visit(
     return Array.from(out).slice(0, 16);
   }, origin);
 
-  const findings = await collectFindings(page, timeoutMs);
+  const [findings, elements] = await Promise.all([
+    collectFindings(page, timeoutMs),
+    collectClickableElements(page),
+  ]);
 
-  return { finalUrl, title, screenshot, sameOriginLinks, findings };
+  return { finalUrl, title, screenshot, sameOriginLinks, findings, elements };
+}
+
+async function collectClickableElements(page: Page): Promise<ClickableElement[]> {
+  return page.evaluate((): ClickableElement[] => {
+    const out: ClickableElement[] = [];
+    const seen = new Set<string>();
+
+    function addEl(
+      type: ClickableElement['type'],
+      el: HTMLElement,
+      labelText: string,
+      href?: string
+    ) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return;
+      // Only capture elements in the top 900px (wireframe/hotspot coordinate space)
+      if (r.top > 900 || r.bottom < 0 || r.left > 1280 || r.right < 0) return;
+      const key = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const label = (labelText || '').trim().slice(0, 60);
+      out.push({
+        type, label,
+        ...(href ? { href } : {}),
+        bbox: {
+          x: Math.round(r.left), y: Math.round(r.top),
+          w: Math.round(r.width), h: Math.round(r.height),
+        },
+      });
+    }
+
+    // Nav links first (highest priority)
+    for (const el of Array.from(document.querySelectorAll<HTMLAnchorElement>(
+      'nav a, header a, [role="navigation"] a, .nav a, .navbar a, .header a, .nav-link, .menu-item a'
+    ))) {
+      addEl('nav', el, el.textContent ?? '', el.href || undefined);
+    }
+
+    // Buttons
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>(
+      'button, [role="button"], input[type="submit"], input[type="button"]'
+    ))) {
+      const label = (el as HTMLInputElement).value || el.textContent || el.getAttribute('aria-label') || '';
+      addEl('button', el, label);
+    }
+
+    // Links (anchors not already captured as nav)
+    for (const el of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+      addEl('link', el, el.textContent ?? '', el.href || undefined);
+    }
+
+    // Clickable cards / containers
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>(
+      '[onclick], [data-href], [data-url], [data-link]'
+    ))) {
+      if (el.tagName === 'A' || el.tagName === 'BUTTON') continue;
+      const heading = el.querySelector<HTMLElement>(
+        'h1,h2,h3,h4,[class*="title"],[class*="heading"],[class*="name"]'
+      );
+      addEl('card', el, el.getAttribute('aria-label') || heading?.textContent || '');
+    }
+
+    return out.slice(0, 40);
+  }).catch(() => []);
 }
 
 async function collectFindings(page: Page, timeoutMs: number): Promise<CrawlFinding[]> {

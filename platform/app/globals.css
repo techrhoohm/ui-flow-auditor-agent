@@ -746,9 +746,29 @@ html[data-theme="light"] .nora-fig {
   background: color-mix(in oklab, var(--fg-faint) 4%, transparent);
   border-style: dashed;
 }
-.hs-rect.hs-clean .hs-rect-label {
-  background: var(--fg-faint);
+.hs-rect.hs-clean .hs-rect-label { background: var(--fg-faint); }
+
+/* Element-type hotspots from crawler */
+.hs-rect.hs-nav {
+  border-color: #6366f1;
+  background: color-mix(in oklab, #6366f1 8%, transparent);
 }
+.hs-rect.hs-nav .hs-rect-label { background: #6366f1; }
+.hs-rect.hs-button {
+  border-color: #10b981;
+  background: color-mix(in oklab, #10b981 8%, transparent);
+}
+.hs-rect.hs-button .hs-rect-label { background: #10b981; }
+.hs-rect.hs-link {
+  border-color: #3b82f6;
+  background: color-mix(in oklab, #3b82f6 7%, transparent);
+}
+.hs-rect.hs-link .hs-rect-label { background: #3b82f6; }
+.hs-rect.hs-card {
+  border-color: #f59e0b;
+  background: color-mix(in oklab, #f59e0b 8%, transparent);
+}
+.hs-rect.hs-card .hs-rect-label { background: #f59e0b; }
 /* label chip at top-left corner of the rect */
 .hs-rect-label {
   position: absolute;

@@ -13,6 +13,7 @@ import type { TreeNode, HistoryItem, AgentSite } from '@/lib/prototype-data';
 import { SITE_TREE, HISTORY, FINDINGS, AGENT_RUN } from '@/lib/prototype-data';
 import { makeTreeForUrl, bfsOrder, extractHost } from '@/lib/prototype-crawl';
 import { dbGet, dbSet, dbGetAll } from '@/lib/db';
+import type { ClickableElement } from '@/lib/url-crawler';
 
 /* ─────────────────────────── local types ─────────────────────────────── */
 
@@ -55,6 +56,7 @@ interface StoredSession {
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
   realFindings: RealFinding[];
+  elementMap: Record<string, ClickableElement[]>;
 }
 
 /* ─────────────────────────── helpers ─────────────────────────────────── */
@@ -659,11 +661,12 @@ function parseWireframeRects(svg: string): Array<{x:number;y:number;w:number;h:n
   return out;
 }
 
-function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: {
+function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, nodeElements }: {
   node: TreeNode; host: string;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
   nodeFindings: RealFinding[];
+  nodeElements: ClickableElement[];
 }) {
   const [view, setView] = useState<'screenshot' | 'wireframe'>('screenshot');
   const [annotations, setAnnotations] = useState(true);
@@ -671,20 +674,26 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
   const realShot = screenshotMap[node.id];
   const realWire = wireframeMap[node.id];
 
-  // Use wireframe rect geometry when available; fall back to common UI zones
-  const rectPool = useMemo(() => {
-    if (realWire) {
-      const parsed = parseWireframeRects(realWire);
-      if (parsed.length >= 2) return parsed;
-    }
-    return FALLBACK_RECTS;
-  }, [realWire]);
-
-  // Build hotspot list:
-  // • findings exist  → colour-coded dashed rects (high/med/low)
-  // • no findings but real screenshot/wireframe present → neutral "clean" outlines
-  //   so component structure is always visible on captured screens
+  // Hotspot list from real clickable elements (preferred) → findings → wireframe rects → fallback zones
   const hotspots = useMemo(() => {
+    // Real interactive elements from the crawler — one hotspot per element
+    if (nodeElements.length > 0) {
+      return nodeElements.map((el, i) => ({
+        nodeId: node.id, nodeLabel: node.label,
+        severity: 'low' as const, message: el.label || el.type, rule: el.href || '',
+        rect: el.bbox,
+        n: i + 1, sev: el.type,
+        label: el.label ? `${el.type} · ${el.label.slice(0, 20)}` : el.type,
+      }));
+    }
+    // Accessibility/UX findings mapped to wireframe geometry
+    const rectPool = (() => {
+      if (realWire) {
+        const parsed = parseWireframeRects(realWire);
+        if (parsed.length >= 2) return parsed;
+      }
+      return FALLBACK_RECTS;
+    })();
     if (nodeFindings.length > 0) {
       return nodeFindings.map((f, i) => ({
         ...f,
@@ -694,14 +703,14 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings }: 
         label: `#${i + 1} · ${f.severity === 'medium' ? 'med' : f.severity}`,
       }));
     }
-    // neutral outlines — show up to 5 component zones so the overlay is present
+    // No data — neutral zone outlines so the overlay is always visible on real screens
     return rectPool.slice(0, 5).map((rect, i) => ({
       nodeId: node.id, nodeLabel: node.label,
       severity: 'low' as const, message: 'No issues found', rule: '',
       rect, n: i + 1, sev: 'clean',
       label: `zone ${i + 1}`,
     }));
-  }, [nodeFindings, rectPool, node.id, node.label]);
+  }, [nodeElements, nodeFindings, realWire, node.id, node.label]);
 
   return (
     <div className="preview">
@@ -783,9 +792,10 @@ interface RightPanelProps {
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
   realFindings: RealFinding[];
+  elementMap: Record<string, ClickableElement[]>;
 }
 
-function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMap, realFindings }: RightPanelProps) {
+function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMap, realFindings, elementMap }: RightPanelProps) {
   const node = selectedNode;
   const host = session.host;
   const [tab, setTab] = useState<'findings' | 'tests' | 'scripts' | 'timeline'>('findings');
@@ -793,6 +803,7 @@ function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMa
 
   // Use real findings if available for this node, else fall back to mock
   const nodeRealFindings = realFindings.filter(f => f.nodeId === node.id);
+  const nodeElements = elementMap[node.id] ?? [];
   const hasRealFindings = realFindings.length > 0;
 
   const allFindings = hasRealFindings
@@ -848,7 +859,7 @@ function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMa
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} nodeFindings={nodeRealFindings}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} nodeFindings={nodeRealFindings} nodeElements={nodeElements}/>
 
             <div className="sev-grid">
               <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
@@ -1307,6 +1318,7 @@ export default function Page() {
   const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({});
   const [wireframeMap, setWireframeMap] = useState<Record<string, string>>({});
   const [realFindings, setRealFindings] = useState<RealFinding[]>([]);
+  const [elementMap, setElementMap] = useState<Record<string, ClickableElement[]>>({});
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([...HISTORY]);
   const [agentSites, setAgentSites] = useState<AgentSite[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
@@ -1368,7 +1380,8 @@ export default function Page() {
     newSession: Session,
     durationMs: number,
     findings: RealFinding[],
-    shots: Record<string, string>
+    shots: Record<string, string>,
+    elMap: Record<string, ClickableElement[]> = {}
   ) => {
     const high = findings.filter(f => f.severity === 'high').length;
     const med  = findings.filter(f => f.severity === 'medium').length;
@@ -1392,6 +1405,7 @@ export default function Page() {
       screenshotMap: shots,
       wireframeMap: {},
       realFindings: findings,
+      elementMap: elMap,
     };
     sessionStoreRef.current.set(id, storedSession);
 
@@ -1448,6 +1462,7 @@ export default function Page() {
     setRealFindings([]);
     setScreenshotMap({});
     setWireframeMap({});
+    setElementMap({});
 
     const t0 = Date.now();
     const auditUrl = targetUrl ?? url;
@@ -1487,6 +1502,7 @@ export default function Page() {
         nodes: Array<{ id: string; label: string; kind: string; url: string; hasScreenshot: boolean }>;
         edges: Array<{ source: string; target: string }>;
         screenshots: Record<string, string>;
+        elementMap?: Record<string, ClickableElement[]>;
         script: { events: Array<{ kind: string; nodeId?: string; severity?: string }> };
         meta: { origin: string; pagesScanned: number; durationMs: number };
       };
@@ -1509,18 +1525,20 @@ export default function Page() {
         }));
 
       const shots = data.screenshots || {};
+      const elMap: Record<string, ClickableElement[]> = data.elementMap || {};
 
       setSession(newSession);
       setSelectedNodeId(tree.id);
       setScreenshotMap(shots);
       setRealFindings(findings);
+      setElementMap(elMap);
       setDiscoveredIds(null);
       setStatusOverrides({});
       setDefectOverrides({});
       setCrawlProgress({ current: null, done: data.meta.pagesScanned, total: data.meta.pagesScanned });
       setShowPanel(true);
 
-      const historyId = addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots);
+      const historyId = addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots, elMap);
 
       // Fire parallel AI wireframe generation for each captured page
       if (Object.keys(shots).length > 0) {
@@ -1706,6 +1724,7 @@ export default function Page() {
     setScreenshotMap(stored.screenshotMap);
     setWireframeMap(stored.wireframeMap || {});
     setRealFindings(stored.realFindings);
+    setElementMap(stored.elementMap || {});
     setDiscoveredIds(null);
     setStatusOverrides({});
     setDefectOverrides({});
@@ -1791,6 +1810,7 @@ export default function Page() {
                 screenshotMap={screenshotMap}
                 wireframeMap={wireframeMap}
                 realFindings={realFindings}
+                elementMap={elementMap}
               />
             : null}
       </div>

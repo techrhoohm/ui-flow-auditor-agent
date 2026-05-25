@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { AuditEvent, AuditScript, Severity } from "@/lib/audit-script";
-import { crawlSite, validateUrl, type CrawlResult } from "@/lib/url-crawler";
+import { crawlSite, validateUrl, type CrawlResult, type ClickableElement } from "@/lib/url-crawler";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,12 +49,13 @@ export async function POST(req: Request) {
         { status: 422 }
       );
     }
-    const { script, nodes, edges, screenshots } = buildResponse(crawl);
+    const { script, nodes, edges, screenshots, elementMap } = buildResponse(crawl);
     return NextResponse.json({
       script,
       nodes,
       edges,
       screenshots,
+      elementMap,
       meta: {
         origin: crawl.origin,
         pagesScanned: crawl.pages.length,
@@ -89,13 +90,16 @@ function buildResponse(crawl: CrawlResult): {
   nodes: ResponseNode[];
   edges: { source: string; target: string }[];
   screenshots: Record<string, string>;
+  elementMap: Record<string, ClickableElement[]>;
 } {
   const target = `URL · ${crawl.origin.replace(/^https?:\/\//, "")}`;
 
   const positions = layoutTree(crawl.pages);
   const screenshots: Record<string, string> = {};
+  const elementMap: Record<string, ClickableElement[]> = {};
   const nodes: ResponseNode[] = crawl.pages.map((p) => {
     if (p.screenshot) screenshots[p.id] = p.screenshot;
+    if (p.elements?.length) elementMap[p.id] = p.elements;
     return {
       id: p.id,
       label: shortenLabel(p.title || p.url),
@@ -152,6 +156,7 @@ function buildResponse(crawl: CrawlResult): {
     nodes,
     edges: crawl.edges,
     screenshots,
+    elementMap,
   };
 }
 
