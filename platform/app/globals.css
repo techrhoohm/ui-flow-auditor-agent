@@ -104,6 +104,24 @@ body {
   letter-spacing: -0.01em;
 }
 .url-bar input::placeholder { color: var(--fg-faint); }
+.url-bar-error {
+  border-color: #E03A4C !important;
+  box-shadow: 0 0 0 4px rgba(224,58,76,.15) !important;
+}
+.audit-error-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  height: 22px;
+  border-radius: 4px;
+  background: rgba(224,58,76,.12);
+  color: #E03A4C;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .topbar-right { display: flex; align-items: center; gap: 8px; }
 
 /* === Buttons =============================================================== */

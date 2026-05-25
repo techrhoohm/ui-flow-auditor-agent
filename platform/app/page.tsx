@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   IcGlobe, IcLock, IcFolder, IcCaret, IcAgent, IcExport,
   IcPlus, IcMinus, IcMaximize, IcClose, IcSun, IcMoon,
@@ -9,9 +9,51 @@ import {
 import { NodeThumb } from '@/components/canvas/NodeThumb';
 import { getScreenshotForNode } from '@/components/canvas/screenshots';
 import { getWireframeForNode } from '@/components/canvas/wireframes';
-import type { TreeNode, HistoryItem } from '@/lib/prototype-data';
+import type { TreeNode, HistoryItem, AgentSite } from '@/lib/prototype-data';
 import { SITE_TREE, HISTORY, FINDINGS, AGENT_RUN } from '@/lib/prototype-data';
-import { makeTreeForUrl, bfsOrder } from '@/lib/prototype-crawl';
+import { makeTreeForUrl, bfsOrder, extractHost } from '@/lib/prototype-crawl';
+
+/* ─────────────────────────── local types ─────────────────────────────── */
+
+interface RealFinding {
+  nodeId: string;
+  nodeLabel: string;
+  severity: 'high' | 'medium' | 'low';
+  message: string;
+  rule: string;
+}
+
+// Shape returned by /api/agent/run  (distinct from prototype-data AgentRun)
+interface BackendRun {
+  runId: string;
+  state: string;
+  url: string;
+  targetId: string;
+  startedAt: number;
+  updatedAt: number;
+  pagesFound: number;
+  issuesFound: number;
+  issuesFiled: number;
+  log: string[];
+  error?: string;
+  partialCrawl?: Array<{ id: string; label: string; url: string; screenshot: string | null }>;
+  crawlResult?: {
+    nodes: Array<{ id: string; label: string; url: string; position: { x: number; y: number }; screenshot: string | null }>;
+    edges: Array<{ source: string; target: string }>;
+    findings: Array<{ nodeId: string; nodeLabel: string; severity: string; message: string; rule: string }>;
+    aiSummary?: string;
+  };
+}
+
+interface UITarget {
+  id: string; url: string; name: string; env: string; state: 'green' | 'amber' | 'red';
+}
+
+interface StoredSession {
+  session: Session;
+  screenshotMap: Record<string, string>;
+  realFindings: RealFinding[];
+}
 
 /* ─────────────────────────── helpers ─────────────────────────────────── */
 
@@ -36,6 +78,116 @@ function countDefects(node: TreeNode) {
   return { pages, findings };
 }
 
+function buildTreeFromApiNodes(
+  apiNodes: Array<{ id: string; label: string; kind: string; url: string }>,
+  edges: Array<{ source: string; target: string }>,
+  script: { events: Array<{ kind: string; nodeId?: string; severity?: string }> }
+): TreeNode {
+  const defectsMap: Record<string, { ux: number; ui: number; a11y: number }> = {};
+  for (const e of script.events) {
+    if (e.kind === 'finding' && e.nodeId) {
+      if (!defectsMap[e.nodeId]) defectsMap[e.nodeId] = { ux: 0, ui: 0, a11y: 0 };
+      if (e.severity === 'high') defectsMap[e.nodeId].ux++;
+      else if (e.severity === 'medium') defectsMap[e.nodeId].ui++;
+      else defectsMap[e.nodeId].a11y++;
+    }
+  }
+  const nodeMap = new Map<string, TreeNode>();
+  for (const n of apiNodes) {
+    let path = '/';
+    try { path = new URL(n.url).pathname || '/'; } catch { /* keep '/' */ }
+    const tag = n.kind === 'entry' ? 'Entry' : n.kind === 'tab' ? 'Section' : 'Page';
+    nodeMap.set(n.id, {
+      id: n.id, tag, label: n.label, path, status: 'done',
+      defects: defectsMap[n.id] || { ux: 0, ui: 0, a11y: 0 },
+      children: [],
+    });
+  }
+  const childIds = new Set(edges.map(e => e.target));
+  for (const e of edges) {
+    const p = nodeMap.get(e.source), c = nodeMap.get(e.target);
+    if (p && c) p.children!.push(c);
+  }
+  const roots = apiNodes.filter(n => !childIds.has(n.id)).map(n => nodeMap.get(n.id)!).filter(Boolean);
+  if (roots.length === 1) return roots[0];
+  return { id: 'root', tag: 'Entry', label: 'Site', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: roots };
+}
+
+function buildTreeFromCrawlResult(cr: BackendRun['crawlResult']): TreeNode {
+  if (!cr || cr.nodes.length === 0) {
+    return { id: 'empty', tag: 'Entry', label: 'No pages', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+  }
+  const defectsMap: Record<string, { ux: number; ui: number; a11y: number }> = {};
+  for (const f of cr.findings) {
+    if (!defectsMap[f.nodeId]) defectsMap[f.nodeId] = { ux: 0, ui: 0, a11y: 0 };
+    if (f.severity === 'high') defectsMap[f.nodeId].ux++;
+    else if (f.severity === 'medium') defectsMap[f.nodeId].ui++;
+    else defectsMap[f.nodeId].a11y++;
+  }
+  const nodeMap = new Map<string, TreeNode>();
+  cr.nodes.forEach((n, i) => {
+    let path = '/';
+    try { path = new URL(n.url).pathname || '/'; } catch { /* keep '/' */ }
+    nodeMap.set(n.id, {
+      id: n.id, tag: i === 0 ? 'Entry' : 'Page',
+      label: n.label, path, status: 'done',
+      defects: defectsMap[n.id] || { ux: 0, ui: 0, a11y: 0 },
+      children: [],
+    });
+  });
+  const childIds = new Set(cr.edges.map(e => e.target));
+  for (const e of cr.edges) {
+    const p = nodeMap.get(e.source), c = nodeMap.get(e.target);
+    if (p && c) p.children!.push(c);
+  }
+  const roots = cr.nodes.filter(n => !childIds.has(n.id)).map(n => nodeMap.get(n.id)!).filter(Boolean);
+  if (roots.length === 1) return roots[0];
+  return { id: 'root', tag: 'Entry', label: 'Site', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: roots };
+}
+
+function buildPartialTree(partialCrawl: BackendRun['partialCrawl']): TreeNode {
+  if (!partialCrawl || partialCrawl.length === 0) {
+    return { id: 'tmp', tag: 'Entry', label: 'Crawling…', path: '/', status: 'crawling', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+  }
+  const first = partialCrawl[0];
+  let rootPath = '/';
+  try { rootPath = new URL(first.url).pathname || '/'; } catch { /* keep '/' */ }
+  return {
+    id: first.id, tag: 'Entry', label: first.label, path: rootPath, status: 'done',
+    defects: { ux: 0, ui: 0, a11y: 0 },
+    children: partialCrawl.slice(1).map(p => {
+      let path = '/';
+      try { path = new URL(p.url).pathname || '/'; } catch { /* keep '/' */ }
+      return { id: p.id, tag: 'Page', label: p.label, path, status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+    }),
+  };
+}
+
+function convertRunToSite(run: BackendRun, target: UITarget): AgentSite {
+  const state: AgentSite['state'] = run.state === 'done'
+    ? (run.issuesFound > 10 ? 'red' : run.issuesFound > 0 ? 'amber' : 'green')
+    : run.state === 'error' ? 'red' : 'amber';
+  const tree = run.crawlResult ? buildTreeFromCrawlResult(run.crawlResult)
+    : buildPartialTree(run.partialCrawl);
+  let hostname = target.url;
+  try { hostname = new URL(target.url.startsWith('http') ? target.url : 'https://' + target.url).hostname; } catch { /* keep raw */ }
+  return {
+    id: run.runId, name: target.name || hostname,
+    url: target.url, env: target.env || 'production',
+    state, pages: run.pagesFound || 0,
+    findings: run.issuesFound || 0, tree,
+  };
+}
+
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function fmtNow(): string {
+  return new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 /* ─────────────────────────── ThemeSwitch ─────────────────────────────── */
 
 function ThemeSwitch({ theme, setTheme }: { theme: string; setTheme: (t: string) => void }) {
@@ -50,18 +202,14 @@ function ThemeSwitch({ theme, setTheme }: { theme: string; setTheme: (t: string)
 /* ─────────────────────────── Topbar ──────────────────────────────────── */
 
 interface TopbarProps {
-  theme: string;
-  setTheme: (t: string) => void;
-  url: string;
-  setUrl: (u: string) => void;
-  onAuditStart: () => void;
-  isAuditing: boolean;
-  onFolderMenu: () => void;
-  onAgentToggle: () => void;
-  agentOpen: boolean;
+  theme: string; setTheme: (t: string) => void;
+  url: string; setUrl: (u: string) => void;
+  onAuditStart: () => void; isAuditing: boolean;
+  onFolderMenu: () => void; onAgentToggle: () => void; agentOpen: boolean;
+  auditError: string | null;
 }
 
-function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFolderMenu, onAgentToggle, agentOpen }: TopbarProps) {
+function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFolderMenu, onAgentToggle, agentOpen, auditError }: TopbarProps) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -73,10 +221,8 @@ function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFold
       </div>
 
       <div className="topbar-mid">
-        <span className="pill-web">
-          <IcGlobe w={10} h={10} strokeWidth={2}/> Web
-        </span>
-        <label className="url-bar">
+        <span className="pill-web"><IcGlobe w={10} h={10} strokeWidth={2}/> Web</span>
+        <label className={'url-bar' + (auditError ? ' url-bar-error' : '')}>
           <IcSearch w={13} h={13}/>
           <input
             value={url}
@@ -87,12 +233,9 @@ function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFold
           />
           <span className="kbd">⌘ K</span>
         </label>
-        <button className="btn btn-icon" onClick={onFolderMenu} title="Audit a local flow">
-          <IcFolder w={14} h={14}/>
-        </button>
-        <div className="btn-split">
-          <button>Recent <IcCaret w={12} h={12} className="caret"/></button>
-        </div>
+        {auditError && <span className="audit-error-chip" title={auditError}>⚠ Failed</span>}
+        <button className="btn btn-icon" onClick={onFolderMenu} title="Audit a local flow"><IcFolder w={14} h={14}/></button>
+        <div className="btn-split"><button>Recent <IcCaret w={12} h={12} className="caret"/></button></div>
       </div>
 
       <div className="topbar-right">
@@ -103,10 +246,8 @@ function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFold
         <div className="btn-split">
           <button><span className="dot dot-accent"/> Sonnet 4.6 · balanced <IcCaret w={12} h={12} className="caret"/></button>
         </div>
-        <button className="btn">
-          <IcExport w={13} h={13}/> Export
-        </button>
-        <button className={'btn ' + (isAuditing ? '' : 'btn-primary')} onClick={onAuditStart}>
+        <button className="btn"><IcExport w={13} h={13}/> Export</button>
+        <button className={'btn ' + (isAuditing ? '' : 'btn-primary')} onClick={onAuditStart} disabled={isAuditing}>
           {isAuditing
             ? <><span className="spinner"/> Crawling…</>
             : <><IcPlay w={11} h={11}/> Start audit</>}
@@ -122,45 +263,32 @@ interface SidebarProps {
   activeId: string;
   setActiveId: (id: string) => void;
   crawlStats: { pages: number; depth: number; findings: number };
+  historyItems: HistoryItem[];
+  onRestoreSession: (id: string) => void;
 }
 
-function Sidebar({ activeId, setActiveId, crawlStats }: SidebarProps) {
-  const todayItems = HISTORY.slice(0, 6);
-  const earlierItems = HISTORY.slice(6);
+function Sidebar({ activeId, setActiveId, crawlStats, historyItems, onRestoreSession }: SidebarProps) {
+  const todayItems = historyItems.slice(0, 6);
+  const earlierItems = historyItems.slice(6);
 
   return (
     <aside className="sidebar">
       <div className="side-block">
         <div className="side-label">Crawl</div>
         <div className="stats-grid">
-          <div className="stat">
-            <div className="stat-num">{crawlStats.pages}</div>
-            <div className="stat-lbl">Pages</div>
-          </div>
-          <div className="stat">
-            <div className="stat-num">{crawlStats.depth}</div>
-            <div className="stat-lbl">Depth</div>
-          </div>
-          <div className="stat">
-            <div className="stat-num">{crawlStats.findings}</div>
-            <div className="stat-lbl">Findings</div>
-          </div>
+          <div className="stat"><div className="stat-num">{crawlStats.pages}</div><div className="stat-lbl">Pages</div></div>
+          <div className="stat"><div className="stat-num">{crawlStats.depth}</div><div className="stat-lbl">Depth</div></div>
+          <div className="stat"><div className="stat-num">{crawlStats.findings}</div><div className="stat-lbl">Findings</div></div>
         </div>
       </div>
 
       <div className="side-block">
-        <div className="side-label">
-          Manual QA
-          <button className="btn btn-sm">Author</button>
-        </div>
+        <div className="side-label">Manual QA <button className="btn btn-sm">Author</button></div>
         <div className="side-hint">Add acceptance criteria the agent should verify on every audit.</div>
       </div>
 
       <div className="side-block">
-        <div className="side-label">
-          Visual baseline
-          <button className="btn btn-sm">Set</button>
-        </div>
+        <div className="side-label">Visual baseline <button className="btn btn-sm">Set</button></div>
         <div className="side-hint">Compares future audits pixel-by-pixel against the saved frame.</div>
       </div>
 
@@ -168,13 +296,15 @@ function Sidebar({ activeId, setActiveId, crawlStats }: SidebarProps) {
         <div className="side-label">History</div>
         <div className="history-divider">Today</div>
         {todayItems.map(h => (
-          <HistoryItemCard key={h.id} item={h} active={activeId === h.id} onClick={() => setActiveId(h.id)}/>
+          <HistoryItemCard key={h.id} item={h} active={activeId === h.id}
+            onClick={() => { setActiveId(h.id); onRestoreSession(h.id); }}/>
         ))}
         {earlierItems.length > 0 && (
           <>
             <div className="history-divider" style={{ marginTop: 14 }}>Earlier</div>
             {earlierItems.map(h => (
-              <HistoryItemCard key={h.id} item={h} active={activeId === h.id} onClick={() => setActiveId(h.id)}/>
+              <HistoryItemCard key={h.id} item={h} active={activeId === h.id}
+                onClick={() => { setActiveId(h.id); onRestoreSession(h.id); }}/>
             ))}
           </>
         )}
@@ -204,9 +334,7 @@ function HistoryItemCard({ item, active, onClick }: { item: HistoryItem; active:
       <div className="history-meta">
         <div className="badges">
           {item.badges.map((b, i) => (
-            <span key={i} className={'badge ' + b.sev}>
-              <span className="b-dot"/>{b.count}
-            </span>
+            <span key={i} className={'badge ' + b.sev}><span className="b-dot"/>{b.count}</span>
           ))}
         </div>
         <div className="history-dur">{item.dur}</div>
@@ -226,9 +354,10 @@ interface TreeNodeProps {
   discoveredIds: Set<string> | null;
   statusOverrides: Record<string, string>;
   defectOverrides: Record<string, { ux: number; ui: number; a11y: number }>;
+  screenshotMap: Record<string, string>;
 }
 
-function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, discoveredIds, statusOverrides, defectOverrides }: TreeNodeProps) {
+function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, discoveredIds, statusOverrides, defectOverrides, screenshotMap }: TreeNodeProps) {
   if (discoveredIds && !discoveredIds.has(node.id)) return null;
 
   const collapsed = collapsedIds.has(node.id);
@@ -238,6 +367,7 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
   const hasChildren = visibleChildren.length > 0;
   const totalDefects = defects.ux + defects.ui + defects.a11y;
   const sev = defects.ux + defects.a11y > 4 ? 'high' : totalDefects > 2 ? 'med' : totalDefects > 0 ? 'low' : 'none';
+  const realShot = screenshotMap[node.id];
 
   return (
     <div className="tree-node-wrap">
@@ -261,7 +391,9 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
             ? <div className="thumb-skeleton"><span className="scanline"/></div>
             : status === 'blocked'
               ? <div className="thumb-blocked"><IcLock w={20} h={20}/></div>
-              : <NodeThumb/>}
+              : realShot
+                ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}/>
+                : <NodeThumb/>}
         </div>
 
         <div className="tree-card-foot">
@@ -270,8 +402,8 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
             <div className="tree-card-path">{node.path}</div>
           </div>
           <div className="defect-row">
-            <Pip kind="ux"   n={defects.ux}/>
-            <Pip kind="ui"   n={defects.ui}/>
+            <Pip kind="ux" n={defects.ux}/>
+            <Pip kind="ui" n={defects.ui}/>
             <Pip kind="a11y" n={defects.a11y}/>
           </div>
         </div>
@@ -288,7 +420,8 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
           {visibleChildren.map(c => (
             <TreeNodeCard key={c.id} node={c} selectedId={selectedId} onSelect={onSelect}
               collapsedIds={collapsedIds} onToggle={onToggle}
-              discoveredIds={discoveredIds} statusOverrides={statusOverrides} defectOverrides={defectOverrides}/>
+              discoveredIds={discoveredIds} statusOverrides={statusOverrides} defectOverrides={defectOverrides}
+              screenshotMap={screenshotMap}/>
           ))}
         </div>
       )}
@@ -309,14 +442,15 @@ function Pip({ kind, n }: { kind: string; n: number }) {
 /* ─────────────────────────── SiteSection ─────────────────────────────── */
 
 interface SiteSectionProps {
-  site: typeof AGENT_RUN.sites[0];
+  site: AgentSite;
   selectedNodeId: string;
   setSelectedNodeId: (id: string) => void;
   collapsedIds: Set<string>;
   onToggle: (id: string) => void;
+  screenshotMap: Record<string, string>;
 }
 
-function SiteSection({ site, selectedNodeId, setSelectedNodeId, collapsedIds, onToggle }: SiteSectionProps) {
+function SiteSection({ site, selectedNodeId, setSelectedNodeId, collapsedIds, onToggle, screenshotMap }: SiteSectionProps) {
   const total = countDefects(site.tree);
   return (
     <div className="site-section">
@@ -352,6 +486,7 @@ function SiteSection({ site, selectedNodeId, setSelectedNodeId, collapsedIds, on
           discoveredIds={null}
           statusOverrides={{}}
           defectOverrides={{}}
+          screenshotMap={screenshotMap}
         />
       </div>
     </div>
@@ -361,7 +496,7 @@ function SiteSection({ site, selectedNodeId, setSelectedNodeId, collapsedIds, on
 /* ─────────────────────────── Canvas ──────────────────────────────────── */
 
 interface CanvasProps {
-  session: { host: string; sessionId: string; tree: TreeNode };
+  session: Session;
   selectedNodeId: string;
   setSelectedNodeId: (id: string) => void;
   collapsedIds: Set<string>;
@@ -373,12 +508,18 @@ interface CanvasProps {
   discoveredIds: Set<string> | null;
   statusOverrides: Record<string, string>;
   defectOverrides: Record<string, { ux: number; ui: number; a11y: number }>;
+  agentSites: AgentSite[];
+  agentRunning: boolean;
+  screenshotMap: Record<string, string>;
 }
 
 function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onToggle,
                   isAuditing, runMode, setRunMode, crawlProgress,
-                  discoveredIds, statusOverrides, defectOverrides }: CanvasProps) {
+                  discoveredIds, statusOverrides, defectOverrides,
+                  agentSites, agentRunning, screenshotMap }: CanvasProps) {
   const [zoom, setZoom] = useState(100);
+
+  const displaySites = agentSites.length > 0 ? agentSites : AGENT_RUN.sites;
 
   return (
     <div className="canvas">
@@ -416,11 +557,12 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
         {runMode === 'multi' && (
           <div className="run-banner-inline">
             <div className="run-banner-meta">
-              <span className="run-pill"><span className="run-pill-dot"/> Run {AGENT_RUN.id}</span>
+              <span className="run-pill">
+                <span className={'run-pill-dot' + (agentRunning ? ' go' : '')}/>
+                {agentRunning ? 'Running…' : 'Agent run complete'}
+              </span>
               <span className="run-meta-sep">·</span>
-              <span>{AGENT_RUN.sites.length} sites</span>
-              <span className="run-meta-sep">·</span>
-              <span>{AGENT_RUN.startedAt} → {AGENT_RUN.finishedAt}</span>
+              <span>{displaySites.length} site{displaySites.length === 1 ? '' : 's'}</span>
             </div>
             <div className="run-banner-actions">
               <button className="btn btn-sm">Compare to last run</button>
@@ -442,8 +584,9 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
                 discoveredIds={discoveredIds}
                 statusOverrides={statusOverrides}
                 defectOverrides={defectOverrides}
+                screenshotMap={screenshotMap}
               />
-            : AGENT_RUN.sites.map(site => (
+            : displaySites.map(site => (
                 <SiteSection
                   key={site.id}
                   site={site}
@@ -451,6 +594,7 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
                   setSelectedNodeId={setSelectedNodeId}
                   collapsedIds={collapsedIds}
                   onToggle={onToggle}
+                  screenshotMap={screenshotMap}
                 />
               ))}
         </div>
@@ -459,23 +603,22 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
       <div className="nora-anchor">
         <div className="nora-bubble">
           {isAuditing
-            ? <>Crawling <b>{session.host}{crawlProgress.current}</b>… {crawlProgress.done}/{crawlProgress.total}</>
-            : runMode === 'multi'
-              ? <>Agent run complete · <b>{AGENT_RUN.sites.length} sites</b> audited.</>
-              : <>Audit complete on <b>{session.host}</b>. Click a node for details.</>}
+            ? <>Crawling <b>{session.host}{crawlProgress.current}</b>… {crawlProgress.done}/{crawlProgress.total || '?'}</>
+            : agentRunning
+              ? <>Agent running <b>{displaySites.length} site{displaySites.length === 1 ? '' : 's'}</b>…</>
+              : runMode === 'multi'
+                ? <>Agent run complete · <b>{displaySites.length} site{displaySites.length === 1 ? '' : 's'}</b> audited.</>
+                : <>Audit complete on <b>{session.host}</b>. Click a node for details.</>}
         </div>
         <div className="nora-fig"/>
       </div>
 
       <div className="statusbar">
-        <span className={'live-dot ' + (isAuditing ? 'go' : '')}/>
-        <span>{isAuditing ? 'Crawling' : 'Idle'}</span>
+        <span className={'live-dot ' + (isAuditing || agentRunning ? 'go' : '')}/>
+        <span>{isAuditing || agentRunning ? 'Crawling' : 'Idle'}</span>
         <span className="sep"/>
-        <span>{runMode === 'multi' ? `${AGENT_RUN.sites.length} sites` : session.host}</span>
-        {isAuditing && (<>
-          <span className="sep"/>
-          <span>{crawlProgress.done}/{crawlProgress.total} pages</span>
-        </>)}
+        <span>{runMode === 'multi' ? `${displaySites.length} sites` : session.host}</span>
+        {isAuditing && (<><span className="sep"/><span>{crawlProgress.done}/{crawlProgress.total} pages</span></>)}
         <span className="sep"/>
         <span>Sonnet 4.6</span>
       </div>
@@ -485,10 +628,11 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
-function PreviewCard({ node, host }: { node: TreeNode; host: string }) {
+function PreviewCard({ node, host, screenshotMap }: { node: TreeNode; host: string; screenshotMap: Record<string, string> }) {
   const [view, setView] = useState<'screenshot' | 'wireframe'>('screenshot');
   const [annotations, setAnnotations] = useState(true);
   const url = 'https://' + host + (node.path === '/' ? '' : node.path);
+  const realShot = screenshotMap[node.id];
 
   return (
     <div className="preview">
@@ -516,9 +660,16 @@ function PreviewCard({ node, host }: { node: TreeNode; host: string }) {
         </button>
       </div>
       <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '') + (annotations ? '' : 'no-annot')}>
-        {view === 'screenshot' ? getScreenshotForNode(node) : getWireframeForNode(node)}
+        {view === 'wireframe'
+          ? getWireframeForNode(node)
+          : realShot
+            ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
+            : getScreenshotForNode(node)}
         <div className="preview-overlay">
-          <span className="ovl-chip"><span className="live-dot go"/> captured 12 min ago · full page · 3.2 MB</span>
+          <span className="ovl-chip">
+            <span className="live-dot go"/>
+            {realShot ? 'captured by crawler · full page' : 'captured 12 min ago · full page · 3.2 MB'}
+          </span>
         </div>
       </div>
     </div>
@@ -530,22 +681,38 @@ function PreviewCard({ node, host }: { node: TreeNode; host: string }) {
 interface RightPanelProps {
   onClose: () => void;
   selectedNode: TreeNode;
-  session: { host: string; sessionId: string; tree: TreeNode };
+  session: Session;
+  screenshotMap: Record<string, string>;
+  realFindings: RealFinding[];
 }
 
-function RightPanel({ onClose, selectedNode, session }: RightPanelProps) {
+function RightPanel({ onClose, selectedNode, session, screenshotMap, realFindings }: RightPanelProps) {
   const node = selectedNode;
   const host = session.host;
   const [tab, setTab] = useState<'findings' | 'tests' | 'scripts' | 'timeline'>('findings');
   const [catFilter, setCatFilter] = useState('all');
 
-  const allFindings = [
-    ...FINDINGS.ux.map(f => ({ ...f, cat: 'ux' as const })),
-    ...FINDINGS.ui.map(f => ({ ...f, cat: 'ui' as const })),
-    ...FINDINGS.a11y.map(f => ({ ...f, cat: 'a11y' as const })),
-  ];
-  const visible = catFilter === 'all' ? allFindings : allFindings.filter(f => f.cat === catFilter);
+  // Use real findings if available for this node, else fall back to mock
+  const nodeRealFindings = realFindings.filter(f => f.nodeId === node.id);
+  const hasRealFindings = realFindings.length > 0;
 
+  const allFindings = hasRealFindings
+    ? nodeRealFindings.map((f, i) => ({
+        id: `rf${i}`,
+        sev: (f.severity === 'medium' ? 'med' : f.severity) as 'high' | 'med' | 'low',
+        msg: f.message,
+        selector: f.rule,
+        cat: (f.severity === 'high' ? 'a11y' : f.severity === 'medium' ? 'ui' : 'ux') as 'ux' | 'ui' | 'a11y',
+        time: undefined,
+        count: undefined,
+      }))
+    : [
+        ...FINDINGS.ux.map(f => ({ ...f, cat: 'ux' as const })),
+        ...FINDINGS.ui.map(f => ({ ...f, cat: 'ui' as const })),
+        ...FINDINGS.a11y.map(f => ({ ...f, cat: 'a11y' as const })),
+      ];
+
+  const visible = catFilter === 'all' ? allFindings : allFindings.filter(f => f.cat === catFilter);
   const totals = {
     high: allFindings.filter(f => f.sev === 'high').length,
     med:  allFindings.filter(f => f.sev === 'med').length,
@@ -582,29 +749,20 @@ function RightPanel({ onClose, selectedNode, session }: RightPanelProps) {
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap}/>
 
             <div className="sev-grid">
-              <div className="sev-card sev-high">
-                <div className="sev-label">High</div>
-                <div className="sev-num">{totals.high}</div>
-              </div>
-              <div className="sev-card sev-med">
-                <div className="sev-label">Medium</div>
-                <div className="sev-num">{totals.med}</div>
-              </div>
-              <div className="sev-card sev-low">
-                <div className="sev-label">Low</div>
-                <div className="sev-num">{totals.low}</div>
-              </div>
+              <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
+              <div className="sev-card sev-med"><div className="sev-label">Medium</div><div className="sev-num">{totals.med}</div></div>
+              <div className="sev-card sev-low"><div className="sev-label">Low</div><div className="sev-num">{totals.low}</div></div>
             </div>
 
             <div className="cat-filter">
               {[
                 { k: 'all',  l: 'All',           n: allFindings.length },
-                { k: 'ux',   l: 'UX',            n: FINDINGS.ux.length },
-                { k: 'ui',   l: 'UI',            n: FINDINGS.ui.length },
-                { k: 'a11y', l: 'Accessibility', n: FINDINGS.a11y.length },
+                { k: 'ux',   l: 'UX',            n: allFindings.filter(f => f.cat === 'ux').length },
+                { k: 'ui',   l: 'UI',            n: allFindings.filter(f => f.cat === 'ui').length },
+                { k: 'a11y', l: 'Accessibility', n: allFindings.filter(f => f.cat === 'a11y').length },
               ].map(c => (
                 <button key={c.k}
                   className={'cat-chip ' + (catFilter === c.k ? 'on' : '')}
@@ -638,15 +796,18 @@ function RightPanel({ onClose, selectedNode, session }: RightPanelProps) {
                   )}
                 </div>
               ))}
+              {visible.length === 0 && (
+                <div className="empty">
+                  <div className="empty-title">No findings</div>
+                  <div className="empty-body">This page looks clean for the selected category.</div>
+                </div>
+              )}
             </div>
           </>
         )}
         {tab === 'tests' && <TestCasesView/>}
         {tab === 'scripts' && (
-          <EmptyState
-            title="No scripts yet"
-            body="Drop Playwright or custom scripts the agent should run on every audit pass."
-            cta="Add script"/>
+          <EmptyState title="No scripts yet" body="Drop Playwright or custom scripts the agent should run on every audit pass." cta="Add script"/>
         )}
         {tab === 'timeline' && <TimelineView/>}
       </div>
@@ -671,9 +832,7 @@ function TestCasesView() {
             <span className={'status-pill ' + (c.status === 'passing' ? 'ok' : 'sev-high')}>
               <span className="status-dot"/>{c.status}
             </span>
-            <span className="testcase-stats">
-              {c.passes} pass · {c.fails} fail · {c.steps} steps
-            </span>
+            <span className="testcase-stats">{c.passes} pass · {c.fails} fail · {c.steps} steps</span>
           </div>
           <div className="testcase-title">{c.title}</div>
         </div>
@@ -766,26 +925,31 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
   );
 }
 
-interface AgentTarget {
-  id: string; url: string; name: string; env: string;
-  state: 'green' | 'amber' | 'red';
+interface AgentPanelProps {
+  onClose: () => void;
+  onRunNow: (targets: UITarget[]) => void;
+  isRunning: boolean;
+  targets: UITarget[];
+  setTargets: (fn: (prev: UITarget[]) => UITarget[]) => void;
 }
 
-function AgentPanel({ onClose, onRunNow }: { onClose: () => void; onRunNow: () => void }) {
+function AgentPanel({ onClose, onRunNow, isRunning, targets, setTargets }: AgentPanelProps) {
   const [schedule, setSchedule] = useState('daily');
   const [visualDiff, setVisualDiff] = useState(5);
   const [minSev, setMinSev] = useState('med');
   const [github, setGithub] = useState(false);
   const [slack, setSlack] = useState(true);
-  const [targets, setTargets] = useState<AgentTarget[]>(
-    AGENT_RUN.sites.map(s => ({ id: s.id, url: s.url, name: s.name, env: s.env, state: s.state }))
-  );
   const [newUrl, setNewUrl] = useState('');
   const [newName, setNewName] = useState('');
 
   const addTarget = () => {
     if (!newUrl.trim()) return;
-    setTargets(t => [...t, { id: 't' + Date.now(), url: newUrl.trim(), name: newName.trim() || newUrl.trim(), env: 'production', state: 'green' }]);
+    const rawUrl = newUrl.trim();
+    const fullUrl = rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl;
+    setTargets(t => [...t, {
+      id: 't' + Date.now(), url: fullUrl,
+      name: newName.trim() || rawUrl, env: 'production', state: 'green',
+    }]);
     setNewUrl(''); setNewName('');
   };
   const removeTarget = (id: string) => setTargets(t => t.filter(x => x.id !== id));
@@ -802,8 +966,11 @@ function AgentPanel({ onClose, onRunNow }: { onClose: () => void; onRunNow: () =
         <div className="ap-section">
           <div className="ap-label">Status</div>
           <div className="ap-status-card">
-            <div className="ap-status-row"><span className="live-dot go"/><span><b>Idle</b> · next run in 4h 12m</span></div>
-            <div className="ap-status-sub">17 runs today · 4 regressions filed</div>
+            <div className="ap-status-row">
+              <span className={'live-dot ' + (isRunning ? 'go' : '')}/>
+              <span><b>{isRunning ? 'Running…' : 'Idle'}</b>{!isRunning && ' · next run in 4h 12m'}</span>
+            </div>
+            <div className="ap-status-sub">{targets.length} target{targets.length === 1 ? '' : 's'} configured</div>
           </div>
         </div>
         <div className="ap-section">
@@ -863,8 +1030,13 @@ function AgentPanel({ onClose, onRunNow }: { onClose: () => void; onRunNow: () =
             <Toggle on={slack} onChange={setSlack}/>
           </div>
         </div>
-        <button className="btn btn-primary ap-run" onClick={onRunNow} disabled={targets.length === 0}>
-          <IcPlay w={11} h={11}/> Run now · {targets.length} site{targets.length === 1 ? '' : 's'}
+        <button
+          className="btn btn-primary ap-run"
+          onClick={() => onRunNow(targets)}
+          disabled={targets.length === 0 || isRunning}>
+          {isRunning
+            ? <><span className="spinner"/> Running {targets.length} site{targets.length === 1 ? '' : 's'}…</>
+            : <><IcPlay w={11} h={11}/> Run now · {targets.length} site{targets.length === 1 ? '' : 's'}</>}
         </button>
       </div>
     </aside>
@@ -888,6 +1060,22 @@ export default function Page() {
   const [agentOpen, setAgentOpen] = useState(false);
   const [runMode, setRunMode] = useState<'single' | 'multi'>('single');
 
+  // Real data state
+  const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({});
+  const [realFindings, setRealFindings] = useState<RealFinding[]>([]);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([...HISTORY]);
+  const [agentSites, setAgentSites] = useState<AgentSite[]>([]);
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  // Lifted agent targets
+  const [agentTargets, setAgentTargets] = useState<UITarget[]>(
+    AGENT_RUN.sites.map(s => ({ id: s.id, url: s.url, name: s.name, env: s.env, state: s.state }))
+  );
+
+  // Session store: historyId → full session data (for restoration)
+  const sessionStoreRef = useRef<Map<string, StoredSession>>(new Map());
+
   const initial = useMemo<Session>(() => ({
     host: 'elevenlabs.io', label: 'ElevenLabs', sessionId: 's0', tree: SITE_TREE,
   }), []);
@@ -906,47 +1094,308 @@ export default function Page() {
     setCollapsedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   };
 
-  const startAudit = () => {
+  /* ─── Add to history helpers ──────────────────────────────────────── */
+
+  const addToHistory = useCallback((
+    itemUrl: string,
+    newSession: Session,
+    durationMs: number,
+    findings: RealFinding[],
+    shots: Record<string, string>
+  ) => {
+    const high = findings.filter(f => f.severity === 'high').length;
+    const med  = findings.filter(f => f.severity === 'medium').length;
+    const low  = findings.filter(f => f.severity === 'low').length;
+    const badges: HistoryItem['badges'] = [];
+    if (high > 0) badges.push({ sev: 'high', count: high });
+    if (med  > 0) badges.push({ sev: 'med',  count: med  });
+    if (low  > 0) badges.push({ sev: 'low',  count: low  });
+
+    const id = 'live-' + Date.now();
+    const item: HistoryItem = {
+      id,
+      url: itemUrl.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0],
+      time: fmtNow(),
+      dur: fmtDur(durationMs),
+      badges,
+    };
+
+    setHistoryItems(prev => [item, ...prev]);
+    setActiveHistory(id);
+
+    sessionStoreRef.current.set(id, {
+      session: newSession,
+      screenshotMap: shots,
+      realFindings: findings,
+    });
+  }, []);
+
+  /* ─── Real URL audit ──────────────────────────────────────────────── */
+
+  const startAudit = useCallback(async () => {
+    if (isAuditing) return;
     if (auditAbortRef.current) auditAbortRef.current.cancelled = true;
     const token = { cancelled: false };
     auditAbortRef.current = token;
 
-    const next = makeTreeForUrl(url);
-    setSession(next as Session);
-    setSelectedNodeId(next.tree.id);
+    setIsAuditing(true);
+    setAuditError(null);
     setRunMode('single');
     setAgentOpen(false);
+    setRealFindings([]);
+    setScreenshotMap({});
 
-    const order = bfsOrder(next.tree);
-    setDiscoveredIds(new Set([next.tree.id]));
-    setStatusOverrides({ [next.tree.id]: 'crawling' });
-    setDefectOverrides(Object.fromEntries(order.map(n => [n.id, { ux: 0, ui: 0, a11y: 0 }])));
-    setIsAuditing(true);
-    setShowPanel(true);
-    setCrawlProgress({ current: next.tree.path, done: 0, total: order.length });
+    const t0 = Date.now();
 
-    let i = 0;
-    const tick = () => {
+    // Optimistic: show root node crawling immediately
+    const rawHost = extractHost(url);
+    const optimisticTree: TreeNode = {
+      id: 'opt-root', tag: 'Entry', label: rawHost, path: '/', status: 'crawling',
+      defects: { ux: 0, ui: 0, a11y: 0 }, children: [],
+    };
+    const optimisticSession: Session = { host: rawHost, label: rawHost, sessionId: 'opt', tree: optimisticTree };
+    setSession(optimisticSession);
+    setSelectedNodeId('opt-root');
+    setDiscoveredIds(new Set(['opt-root']));
+    setStatusOverrides({ 'opt-root': 'crawling' });
+    setDefectOverrides({});
+    setCrawlProgress({ current: '/', done: 0, total: 1 });
+    setShowPanel(false);
+
+    try {
+      const canonicalUrl = url.trim().startsWith('http') ? url.trim() : 'https://' + url.trim();
+      const res = await fetch('/api/audit/url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: canonicalUrl, maxPages: 6 }),
+      });
+
       if (token.cancelled) return;
-      const n = order[i];
-      setStatusOverrides(prev => ({ ...prev, [n.id]: n.status === 'blocked' ? 'blocked' : 'done' }));
-      setDefectOverrides(prev => ({ ...prev, [n.id]: n.defects }));
-      setDiscoveredIds(prev => { const nx = new Set(prev); (n.children || []).forEach(c => nx.add(c.id)); return nx; });
-      i++;
-      if (i < order.length) {
-        setStatusOverrides(prev => ({ ...prev, [order[i].id]: 'crawling' }));
-        setCrawlProgress({ current: order[i].path, done: i, total: order.length });
-        setTimeout(tick, 420 + Math.random() * 220);
-      } else {
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Request failed' }));
+        throw new Error((err as { error?: string }).error || 'Audit failed');
+      }
+
+      const data = await res.json() as {
+        nodes: Array<{ id: string; label: string; kind: string; url: string; hasScreenshot: boolean }>;
+        edges: Array<{ source: string; target: string }>;
+        screenshots: Record<string, string>;
+        script: { events: Array<{ kind: string; nodeId?: string; severity?: string }> };
+        meta: { origin: string; pagesScanned: number; durationMs: number };
+      };
+
+      if (token.cancelled) return;
+
+      const host = data.meta.origin.replace(/^https?:\/\//, '').replace(/^www\./, '');
+      const label = host.split('.')[0];
+      const tree = buildTreeFromApiNodes(data.nodes, data.edges, data.script);
+      const newSession: Session = { host, label, sessionId: 'live-' + Date.now(), tree };
+
+      const findings: RealFinding[] = data.script.events
+        .filter(e => e.kind === 'finding' && e.nodeId)
+        .map(e => ({
+          nodeId: e.nodeId!,
+          nodeLabel: data.nodes.find(n => n.id === e.nodeId)?.label || '',
+          severity: (e.severity || 'low') as RealFinding['severity'],
+          message: (e as { utterance?: string }).utterance || '',
+          rule: '',
+        }));
+
+      setSession(newSession);
+      setSelectedNodeId(tree.id);
+      setScreenshotMap(data.screenshots || {});
+      setRealFindings(findings);
+      setDiscoveredIds(null);
+      setStatusOverrides({});
+      setDefectOverrides({});
+      setCrawlProgress({ current: null, done: data.meta.pagesScanned, total: data.meta.pagesScanned });
+      setShowPanel(true);
+
+      addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, data.screenshots || {});
+
+    } catch (err) {
+      if (token.cancelled) return;
+      const msg = err instanceof Error ? err.message : 'Audit failed';
+      setAuditError(msg);
+
+      // Fallback: use mock tree so canvas isn't empty
+      const fallback = makeTreeForUrl(url);
+      setSession(fallback as Session);
+      setSelectedNodeId(fallback.tree.id);
+      setDiscoveredIds(null);
+      setStatusOverrides({});
+      setDefectOverrides({});
+    } finally {
+      if (!token.cancelled) {
         setIsAuditing(false);
-        setStatusOverrides({});
-        setDefectOverrides({});
-        setDiscoveredIds(null);
-        setCrawlProgress({ current: null, done: order.length, total: order.length });
+        setCrawlProgress({ current: null, done: 0, total: 0 });
+      }
+    }
+  }, [url, isAuditing, addToHistory]);
+
+  /* ─── Agent run (parallel per-target with SSE stream) ─────────────── */
+
+  const agentAbortRef = useRef<AbortController | null>(null);
+
+  const runAgentTargets = useCallback(async (targets: UITarget[]) => {
+    if (agentRunning || targets.length === 0) return;
+
+    agentAbortRef.current?.abort();
+    const abort = new AbortController();
+    agentAbortRef.current = abort;
+
+    setAgentRunning(true);
+    setRunMode('multi');
+    setAgentOpen(false);
+    setShowPanel(false);
+    setAgentSites([]);
+
+    // Placeholder sites: show all targets as amber/crawling while running
+    const placeholders: AgentSite[] = targets.map(t => {
+      let hostname = t.url;
+      try { hostname = new URL(t.url.startsWith('http') ? t.url : 'https://' + t.url).hostname; } catch { /* keep raw */ }
+      return {
+        id: t.id, name: t.name, url: t.url, env: t.env, state: 'amber',
+        pages: 0, findings: 0,
+        tree: { id: t.id + '-root', tag: 'Entry', label: hostname, path: '/', status: 'crawling', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] },
+      };
+    });
+    setAgentSites(placeholders);
+
+    // Open SSE stream for live updates
+    const streamUpdates = async () => {
+      try {
+        const sseRes = await fetch('/api/agent/stream', { signal: abort.signal });
+        if (!sseRes.body) return;
+        const reader = sseRes.body.getReader();
+        const dec = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = dec.decode(value);
+          for (const chunk of text.split('\n\n')) {
+            if (!chunk.startsWith('data:')) continue;
+            try {
+              const run = JSON.parse(chunk.slice(5)) as BackendRun;
+              setAgentSites(prev => prev.map(site => {
+                const siteHost = site.url.replace(/^https?:\/\//, '').replace(/^www\./, '');
+                const runHost = run.url.replace(/^https?:\/\//, '').replace(/^www\./, '');
+                if (siteHost !== runHost && site.id !== run.targetId) return site;
+                const target = targets.find(t => t.id === run.targetId || t.url.includes(runHost)) || targets[0];
+                return convertRunToSite(run, target);
+              }));
+            } catch { /* skip malformed */ }
+          }
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          console.warn('[agent stream]', err);
+        }
       }
     };
-    setTimeout(tick, 480);
-  };
+    streamUpdates(); // fire-and-forget
+
+    // Run all targets. Call once per target in parallel so they run concurrently.
+    try {
+      const apiTargets = targets.map(t => ({
+        id: t.id,
+        url: t.url.startsWith('http') ? t.url : 'https://' + t.url,
+        name: t.name,
+        enabled: true,
+      }));
+
+      // Parallel: one fetch per target
+      const runPromises = apiTargets.map(target =>
+        fetch('/api/agent/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targets: [target] }),
+          signal: abort.signal,
+        }).then(r => r.ok ? r.json() as Promise<{ runs: BackendRun[] }> : Promise.resolve({ runs: [] }))
+          .catch(() => ({ runs: [] as BackendRun[] }))
+      );
+
+      const results = await Promise.all(runPromises);
+      abort.abort(); // close SSE
+
+      // Build final site list from results
+      const finalSites: AgentSite[] = [];
+      const allRuns: BackendRun[] = [];
+
+      results.forEach((res, i) => {
+        const run = res.runs?.[0];
+        if (run) {
+          allRuns.push(run);
+          finalSites.push(convertRunToSite(run, targets[i]));
+        } else {
+          // Keep placeholder as red/error
+          finalSites.push({ ...placeholders[i], state: 'red' });
+        }
+      });
+
+      setAgentSites(finalSites);
+
+      // Add each run to history
+      const t0 = Date.now();
+      for (let i = 0; i < allRuns.length; i++) {
+        const run = allRuns[i];
+        const target = targets[i];
+        if (!run) continue;
+
+        const findings: RealFinding[] = (run.crawlResult?.findings || []).map(f => ({
+          nodeId: f.nodeId,
+          nodeLabel: f.nodeLabel,
+          severity: (f.severity === 'medium' ? 'medium' : f.severity) as RealFinding['severity'],
+          message: f.message,
+          rule: f.rule,
+        }));
+
+        const shots: Record<string, string> = {};
+        for (const n of run.crawlResult?.nodes || []) {
+          if (n.screenshot) shots[n.id] = n.screenshot;
+        }
+
+        const tree = run.crawlResult ? buildTreeFromCrawlResult(run.crawlResult) : finalSites[i].tree;
+        let hostname = target.url;
+        try { hostname = new URL(target.url.startsWith('http') ? target.url : 'https://' + target.url).hostname; } catch { /* keep raw */ }
+
+        const agentSession: Session = {
+          host: hostname, label: hostname.split('.')[0],
+          sessionId: run.runId, tree,
+        };
+
+        const dur = run.updatedAt && run.startedAt ? run.updatedAt - run.startedAt : Date.now() - t0;
+        addToHistory(target.url, agentSession, dur, findings, shots);
+      }
+
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        console.error('[agent run]', err);
+      }
+    } finally {
+      setAgentRunning(false);
+    }
+  }, [agentRunning, addToHistory]);
+
+  /* ─── Restore session from history ───────────────────────────────── */
+
+  const restoreSession = useCallback((historyId: string) => {
+    const stored = sessionStoreRef.current.get(historyId);
+    if (!stored) return;
+    setSession(stored.session);
+    setSelectedNodeId(stored.session.tree.id);
+    setScreenshotMap(stored.screenshotMap);
+    setRealFindings(stored.realFindings);
+    setDiscoveredIds(null);
+    setStatusOverrides({});
+    setDefectOverrides({});
+    setRunMode('single');
+    setShowPanel(true);
+    setAgentOpen(false);
+  }, []);
+
+  /* ─── Crawl stats ─────────────────────────────────────────────────── */
 
   const crawlStats = useMemo(() => {
     let pages = 0, depth = 0, findings = 0;
@@ -966,9 +1415,10 @@ export default function Page() {
   const selectedNode = useMemo(() => {
     let n = findNodeInTree(session.tree, selectedNodeId);
     if (n) return n;
+    for (const s of agentSites) { n = findNodeInTree(s.tree, selectedNodeId); if (n) return n; }
     for (const s of AGENT_RUN.sites) { n = findNodeInTree(s.tree, selectedNodeId); if (n) return n; }
     return session.tree;
-  }, [session, selectedNodeId]);
+  }, [session, selectedNodeId, agentSites]);
 
   return (
     <div className="app">
@@ -979,9 +1429,16 @@ export default function Page() {
         onFolderMenu={() => setFolderOpen(true)}
         onAgentToggle={() => { setAgentOpen(o => !o); if (!agentOpen) setShowPanel(false); }}
         agentOpen={agentOpen}
+        auditError={auditError}
       />
       <div className="stage" style={{ gridTemplateColumns: cols }}>
-        <Sidebar activeId={activeHistory} setActiveId={setActiveHistory} crawlStats={crawlStats}/>
+        <Sidebar
+          activeId={activeHistory}
+          setActiveId={setActiveHistory}
+          crawlStats={crawlStats}
+          historyItems={historyItems}
+          onRestoreSession={restoreSession}
+        />
         <Canvas
           session={session}
           selectedNodeId={selectedNodeId}
@@ -995,11 +1452,26 @@ export default function Page() {
           defectOverrides={defectOverrides}
           runMode={runMode}
           setRunMode={setRunMode}
+          agentSites={agentSites}
+          agentRunning={agentRunning}
+          screenshotMap={screenshotMap}
         />
         {agentOpen
-          ? <AgentPanel onClose={() => setAgentOpen(false)} onRunNow={() => { setRunMode('multi'); setAgentOpen(false); setShowPanel(false); }}/>
+          ? <AgentPanel
+              onClose={() => setAgentOpen(false)}
+              onRunNow={runAgentTargets}
+              isRunning={agentRunning}
+              targets={agentTargets}
+              setTargets={fn => setAgentTargets(fn)}
+            />
           : showPanel && selectedNode
-            ? <RightPanel onClose={() => setShowPanel(false)} selectedNode={selectedNode} session={session}/>
+            ? <RightPanel
+                onClose={() => setShowPanel(false)}
+                selectedNode={selectedNode}
+                session={session}
+                screenshotMap={screenshotMap}
+                realFindings={realFindings}
+              />
             : null}
       </div>
       {folderOpen && <FolderMenu onClose={() => setFolderOpen(false)}/>}

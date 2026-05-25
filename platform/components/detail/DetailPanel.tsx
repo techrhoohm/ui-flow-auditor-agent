@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import type { Severity } from "@/lib/audit-script";
 import type { AuditFinding } from "@/lib/audit-runner";
@@ -11,7 +11,7 @@ import { useScripts } from "@/lib/test-scripts";
 import { ScriptsTab } from "./ScriptsTab";
 import { TestCasesTab } from "./TestCasesTab";
 
-type Tab = "findings" | "tests" | "scripts";
+type Tab = "findings" | "tests" | "scripts" | "timeline";
 
 type Props = {
   nodeId: string | null;
@@ -24,207 +24,221 @@ type Props = {
 
 const severityOrder: Severity[] = ["high", "medium", "low"];
 
-const severityChip: Record<Severity, string> = {
-  high: "border-rose-500/40 bg-rose-500/10 text-rose-300",
-  medium: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  low: "border-sky-500/40 bg-sky-500/10 text-sky-300",
-};
-
-const severityDot: Record<Severity, string> = {
-  high: "bg-rose-400",
-  medium: "bg-amber-300",
-  low: "bg-sky-400",
-};
-
-const severityLabel: Record<Severity, string> = {
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-};
-
 const kindLabel: Record<ScreenNodeData["kind"], string> = {
-  entry: "Entry surface",
+  entry: "Entry",
   tab: "Tab",
   modal: "Modal",
-  detail: "Detail screen",
+  detail: "Detail",
 };
 
-export function DetailPanel({
-  nodeId,
-  data,
-  findings,
-  targetKey,
-  model,
-  onClose,
-}: Props) {
+const SEV = {
+  high:   { color: "var(--sev-high)", bg: "color-mix(in oklab, var(--sev-high) 10%, transparent)", border: "color-mix(in oklab, var(--sev-high) 25%, transparent)" },
+  medium: { color: "var(--sev-high)", bg: "color-mix(in oklab, var(--sev-high) 10%, transparent)", border: "color-mix(in oklab, var(--sev-high) 25%, transparent)" },
+  low:    { color: "var(--sev-low)",  bg: "color-mix(in oklab, var(--sev-low)  10%, transparent)", border: "color-mix(in oklab, var(--sev-low)  25%, transparent)" },
+};
+const SEV_LABEL: Record<Severity, string> = { high: "High", medium: "Medium", low: "Low" };
+
+export function DetailPanel({ nodeId, data, findings, targetKey, model, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("findings");
+  const [sevFilter, setSevFilter] = useState<"all" | Severity>("all");
 
   const testCases = useTestCases(targetKey, nodeId);
   const scripts = useScripts(targetKey, nodeId);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    setTab("findings");
-  }, [nodeId]);
+  useEffect(() => { setTab("findings"); setSevFilter("all"); }, [nodeId]);
+
+  if (!nodeId || !data) return null;
+
+  const sevCounts = { high: 0, medium: 0, low: 0 } as Record<Severity, number>;
+  findings.forEach((f) => sevCounts[f.severity]++);
+
+  const visible = sevFilter === "all" ? findings : findings.filter((f) => f.severity === sevFilter);
 
   return (
-    <AnimatePresence>
-      {nodeId && data && (
-        <motion.aside
-          key={nodeId}
-          initial={{ x: 400, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 400, opacity: 0 }}
-          transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-          className="absolute right-0 top-0 z-40 flex h-full w-[380px] flex-col border-l border-zinc-800 bg-zinc-950/95 backdrop-blur-xl"
-        >
-          <header className="flex items-start justify-between border-b border-zinc-800 px-5 py-4">
-            <div className="min-w-0 pr-2">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-                {kindLabel[data.kind]}
-              </div>
-              <h2 className="mt-0.5 truncate text-[15px] font-semibold text-zinc-100">
-                {data.label}
-              </h2>
-              {data.nodeUrl && (
-                <p className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">
-                  {data.nodeUrl}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 text-zinc-500 transition-colors hover:border-zinc-600 hover:text-zinc-200"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12">
-                <path
-                  d="M2 2 L10 10 M10 2 L2 10"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          </header>
-
-          <div className="flex shrink-0 items-center gap-0.5 border-b border-zinc-800 bg-zinc-950/60 px-3">
-            <TabButton
-              active={tab === "findings"}
-              onClick={() => setTab("findings")}
-              label="Findings"
-              count={findings.length}
-            />
-            <TabButton
-              active={tab === "tests"}
-              onClick={() => setTab("tests")}
-              label="Test cases"
-              count={testCases.length}
-            />
-            <TabButton
-              active={tab === "scripts"}
-              onClick={() => setTab("scripts")}
-              label="Scripts"
-              count={scripts.length}
-            />
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {tab === "findings" && (
-              <FindingsTab nodeId={nodeId} data={data} findings={findings} nodeLabel={data.label} model={model} />
-            )}
-            {tab === "tests" && (
-              <TestCasesTab
-                targetKey={targetKey}
-                nodeId={nodeId}
-                nodeLabel={data.label}
-                nodeKind={data.kind}
-                findings={findings}
-                model={model}
-                screenshotUrl={data.screenshotUrl ?? null}
-                nodeUrl={data.nodeUrl ?? null}
-              />
-            )}
-            {tab === "scripts" && (
-              <ScriptsTab
-                targetKey={targetKey}
-                nodeId={nodeId}
-                nodeUrl={data.nodeUrl ?? null}
-                nodeLabel={data.label}
-                model={model}
-              />
-            )}
-          </div>
-        </motion.aside>
-      )}
-    </AnimatePresence>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  label,
-  count,
-  disabled,
-  tooltip,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  count?: number;
-  disabled?: boolean;
-  tooltip?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={tooltip}
-      className={`relative flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition-colors ${
-        active
-          ? "text-violet-200"
-          : "text-zinc-400 hover:text-zinc-200"
-      } disabled:cursor-not-allowed disabled:opacity-50`}
+    <motion.aside
+      key={nodeId}
+      initial={{ x: 380, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 380, opacity: 0 }}
+      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+      style={{
+        width: 380, flexShrink: 0,
+        display: "flex", flexDirection: "column",
+        background: "var(--bg-elev)",
+        borderLeft: "1px solid var(--border)",
+        overflowY: "auto",
+        position: "relative",
+        height: "100%",
+      }}
     >
-      <span>{label}</span>
-      {typeof count === "number" && (
-        <span
-          className={`rounded-full px-1.5 text-[10px] font-mono ${
-            active
-              ? "bg-violet-500/20 text-violet-200"
-              : "bg-zinc-800 text-zinc-400"
-          }`}
+      {/* Header */}
+      <div style={{
+        padding: "18px 20px 14px",
+        borderBottom: "1px solid var(--border)",
+        display: "flex", flexDirection: "column", gap: 4,
+        position: "relative",
+      }}>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          style={{
+            position: "absolute", top: 14, right: 14,
+            border: 0, background: "none", cursor: "pointer",
+            color: "var(--fg-faint)", width: 28, height: 28,
+            borderRadius: 6, display: "grid", placeItems: "center",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-sunk)";
+            (e.currentTarget as HTMLButtonElement).style.color = "var(--fg)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "none";
+            (e.currentTarget as HTMLButtonElement).style.color = "var(--fg-faint)";
+          }}
         >
-          {count}
-        </span>
-      )}
-      {active && (
-        <span className="absolute inset-x-2 -bottom-px h-px bg-violet-300" />
-      )}
-    </button>
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        </button>
+
+        <div style={{
+          fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10,
+          textTransform: "uppercase", letterSpacing: "0.1em",
+          color: "var(--fg-faint)", fontWeight: 600,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{
+            padding: "1px 6px", borderRadius: 4,
+            background: "var(--chip-bg)", border: "1px solid var(--border)",
+            color: "var(--fg-muted)",
+          }}>
+            {kindLabel[data.kind]}
+          </span>
+          {data.nodeUrl && (
+            <span style={{ color: "var(--fg-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {(() => { try { return new URL(data.nodeUrl).pathname; } catch { return data.nodeUrl; } })()}
+            </span>
+          )}
+        </div>
+
+        <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.015em", color: "var(--fg)" }}>
+          {data.label}
+        </div>
+
+        {data.nodeUrl && (
+          <div style={{
+            fontFamily: "var(--font-mono, ui-monospace)", fontSize: 11,
+            color: "var(--fg-muted)", overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2,
+          }}>
+            {data.nodeUrl}
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div style={{
+        display: "flex", padding: "0 20px",
+        borderBottom: "1px solid var(--border)",
+        background: "var(--bg-elev)",
+        flexShrink: 0,
+      }}>
+        {([
+          { id: "findings" as Tab, label: "Findings", count: findings.length },
+          { id: "tests"    as Tab, label: "Test cases", count: testCases.length },
+          { id: "scripts"  as Tab, label: "Scripts", count: scripts.length },
+          { id: "timeline" as Tab, label: "Timeline", count: undefined },
+        ] as { id: Tab; label: string; count?: number }[]).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            style={{
+              border: 0, background: "none", cursor: "pointer",
+              padding: "12px 0", marginRight: 20,
+              color: tab === t.id ? "var(--fg)" : "var(--fg-muted)",
+              font: "inherit", fontSize: 12.5, fontWeight: 500,
+              borderBottom: tab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
+              marginBottom: -1,
+              display: "inline-flex", alignItems: "center", gap: 6,
+              transition: "color .12s", whiteSpace: "nowrap",
+            }}
+          >
+            <span>{t.label}</span>
+            {typeof t.count === "number" && (
+              <span style={{
+                fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10.5,
+                background: tab === t.id ? "var(--accent-soft)" : "var(--chip-bg)",
+                color: tab === t.id ? "var(--accent)" : "var(--fg-muted)",
+                padding: "1px 6px", borderRadius: 999, fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+              }}>
+                {t.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px 24px" }}>
+        {tab === "findings" && (
+          <FindingsTab
+            nodeId={nodeId}
+            data={data}
+            findings={findings}
+            visible={visible}
+            sevCounts={sevCounts}
+            sevFilter={sevFilter}
+            onSevFilter={setSevFilter}
+            nodeLabel={data.label}
+            model={model}
+          />
+        )}
+        {tab === "tests" && (
+          <TestCasesTab
+            targetKey={targetKey}
+            nodeId={nodeId}
+            nodeLabel={data.label}
+            nodeKind={data.kind}
+            findings={findings}
+            model={model}
+            screenshotUrl={data.screenshotUrl ?? null}
+            nodeUrl={data.nodeUrl ?? null}
+          />
+        )}
+        {tab === "scripts" && (
+          <ScriptsTab
+            targetKey={targetKey}
+            nodeId={nodeId}
+            nodeUrl={data.nodeUrl ?? null}
+            nodeLabel={data.label}
+            model={model}
+          />
+        )}
+        {tab === "timeline" && <TimelinePlaceholder findings={findings} />}
+      </div>
+    </motion.aside>
   );
 }
 
 function FindingsTab({
-  nodeId,
-  data,
-  findings,
-  nodeLabel,
-  model,
+  nodeId, data, findings, visible, sevCounts, sevFilter, onSevFilter, nodeLabel, model,
 }: {
   nodeId: string;
   data: ScreenNodeData;
   findings: AuditFinding[];
+  visible: AuditFinding[];
+  sevCounts: Record<Severity, number>;
+  sevFilter: "all" | Severity;
+  onSevFilter: (f: "all" | Severity) => void;
   nodeLabel: string;
   model: string;
 }) {
@@ -240,8 +254,8 @@ function FindingsTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, severity, nodeLabel, model }),
       });
-      const data = await res.json() as { explanation?: string; error?: string };
-      setExplanations((prev) => ({ ...prev, [key]: data.explanation ?? data.error ?? "No explanation." }));
+      const json = await res.json() as { explanation?: string; error?: string };
+      setExplanations((prev) => ({ ...prev, [key]: json.explanation ?? json.error ?? "No explanation." }));
     } catch {
       setExplanations((prev) => ({ ...prev, [key]: "Request failed." }));
     } finally {
@@ -249,141 +263,231 @@ function FindingsTab({
     }
   };
 
-  const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
-  findings.forEach((f) => counts[f.severity]++);
-
-  const grouped: Record<Severity, AuditFinding[]> = {
-    high: [],
-    medium: [],
-    low: [],
-  };
-  findings.forEach((f) => grouped[f.severity].push(f));
-
   return (
-    <div className="px-5 pb-6">
-      <div className="mt-5 flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-        {data.screenshotUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={data.screenshotUrl}
-            alt={data.label}
-            className="max-h-[420px] w-full rounded-md object-contain"
-          />
-        ) : (
-          <div className="h-[280px] w-[156px]">
-            <MockScreen screenId={nodeId} />
+    <>
+      {/* Preview card */}
+      <div style={{
+        border: "1px solid var(--border)", borderRadius: 12,
+        background: "var(--bg-sunk)", overflow: "hidden",
+        boxShadow: "var(--shadow-sm)",
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "8px 12px", borderBottom: "1px solid var(--border)",
+          background: "var(--bg-elev)",
+        }}>
+          <div style={{ display: "flex", gap: 5 }}>
+            {[0,1,2].map((i) => (
+              <span key={i} style={{ width: 8, height: 8, borderRadius: 999, background: "var(--border-strong)" }} />
+            ))}
           </div>
-        )}
-      </div>
-
-      <div className="mt-5 grid grid-cols-3 gap-2">
-        <SummaryStat label="High" value={counts.high} tint="rose" />
-        <SummaryStat label="Med" value={counts.medium} tint="amber" />
-        <SummaryStat label="Low" value={counts.low} tint="sky" />
-      </div>
-
-      <div className="mt-5">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-          Findings ({findings.length})
+          <span style={{
+            flex: 1, fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10.5,
+            color: "var(--fg-faint)", background: "var(--bg-sunk)",
+            borderRadius: 4, padding: "2px 6px", marginLeft: 6,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {data.nodeUrl ?? data.label}
+          </span>
         </div>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: data.screenshotUrl ? "#FFFFFF" : "var(--bg-sunk)",
+          minHeight: 200, maxHeight: 300, overflow: "hidden",
+        }}>
+          {data.screenshotUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={data.screenshotUrl} alt={data.label} style={{ width: "100%", objectFit: "contain" }} />
+          ) : (
+            <div style={{ width: 156, height: 200 }}>
+              <MockScreen screenId={nodeId} />
+            </div>
+          )}
+        </div>
+      </div>
 
-        {findings.length === 0 ? (
-          <p className="mt-2 text-[12px] text-zinc-500">
-            No findings on this screen yet.
-          </p>
+      {/* Severity grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 16 }}>
+        {(["high", "medium", "low"] as Severity[]).map((sev) => {
+          const s = SEV[sev];
+          return (
+            <div key={sev} style={{
+              borderRadius: 8, border: `1px solid ${s.border}`,
+              background: s.bg, padding: "8px 12px",
+            }}>
+              <div style={{ fontSize: 10, fontFamily: "var(--font-mono, ui-monospace)", textTransform: "uppercase", letterSpacing: "0.06em", color: s.color, fontWeight: 600 }}>
+                {SEV_LABEL[sev]}
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 600, color: s.color, letterSpacing: "-0.02em", lineHeight: 1.2, fontVariantNumeric: "tabular-nums" }}>
+                {sevCounts[sev]}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Category filter */}
+      <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
+        {([
+          { k: "all" as const,      l: "All",    n: findings.length },
+          { k: "high" as Severity,   l: "High",   n: sevCounts.high },
+          { k: "medium" as Severity, l: "Medium", n: sevCounts.medium },
+          { k: "low" as Severity,    l: "Low",    n: sevCounts.low },
+        ]).map((c) => {
+          const on = sevFilter === c.k;
+          return (
+            <button
+              key={c.k}
+              type="button"
+              onClick={() => onSevFilter(c.k)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                height: 26, padding: "0 10px", borderRadius: 999,
+                border: on ? "1px solid var(--accent-ring)" : "1px solid var(--border)",
+                background: on ? "var(--accent-soft)" : "var(--bg-sunk)",
+                color: on ? "var(--accent)" : "var(--fg-muted)",
+                fontSize: 11.5, fontWeight: 500, cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {c.l}
+              <span style={{
+                fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10,
+                fontVariantNumeric: "tabular-nums",
+              }}>
+                {c.n}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Findings list */}
+      <div style={{ marginTop: 14 }}>
+        {visible.length === 0 ? (
+          <p style={{ fontSize: 12, color: "var(--fg-muted)" }}>No findings on this screen yet.</p>
         ) : (
-          <ul className="mt-3 space-y-3">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {severityOrder.flatMap((sev) =>
-              grouped[sev].map((f, i) => {
+              visible.filter((f) => f.severity === sev).map((f, i) => {
+                const s = SEV[sev];
                 const key = `${sev}-${i}-${f.at}`;
                 const explanation = explanations[key];
                 const isLoading = loading[key];
                 return (
-                  <li
-                    key={key}
-                    className="rounded-md border border-zinc-800 bg-zinc-900/60 p-3"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${severityChip[sev]}`}
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${severityDot[sev]}`}
-                        />
-                        {severityLabel[sev]}
-                      </span>
-                      <div className="flex items-center gap-2">
+                  <div key={key} style={{
+                    borderRadius: 8, border: "1px solid var(--border)",
+                    background: "var(--bg-sunk)", padding: "12px 14px",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10, fontWeight: 600,
+                          padding: "2px 7px", borderRadius: 999, lineHeight: 1,
+                          color: s.color, background: s.bg, border: `1px solid ${s.border}`,
+                        }}>
+                          <span style={{ width: 5, height: 5, borderRadius: 999, background: s.color, display: "inline-block" }} />
+                          {SEV_LABEL[sev]}
+                        </span>
+                        <span style={{ fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10, color: "var(--fg-faint)", fontVariantNumeric: "tabular-nums" }}>
+                          {new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {!explanation && (
                           <button
                             type="button"
                             onClick={() => explain(key, f.message, sev)}
                             disabled={isLoading}
-                            className="text-[10px] font-medium text-violet-400 hover:text-violet-200 disabled:cursor-wait disabled:opacity-50"
+                            style={{
+                              border: 0, background: "none", cursor: isLoading ? "wait" : "pointer",
+                              display: "inline-flex", alignItems: "center", gap: 4,
+                              fontSize: 10.5, fontWeight: 500, color: "var(--accent)",
+                              opacity: isLoading ? 0.5 : 1, fontFamily: "inherit",
+                              padding: "3px 8px", borderRadius: 6,
+                              outline: "1px solid var(--accent-ring)",
+                            }}
                           >
-                            {isLoading ? "Asking Nora…" : "Explain"}
+                            ✦ {isLoading ? "Asking…" : "Explain"}
                           </button>
                         )}
-                        <span className="font-mono text-[10px] text-zinc-500">
-                          {new Date(f.at).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </span>
                       </div>
                     </div>
-                    <p className="mt-2 text-[12px] leading-relaxed text-zinc-200">
+
+                    <p style={{ marginTop: 8, fontSize: 12, lineHeight: 1.55, color: "var(--fg)", margin: "8px 0 0" }}>
                       {f.message}
                     </p>
+
                     {explanation && (
-                      <div className="mt-2 rounded-md border border-violet-400/20 bg-violet-500/5 px-3 py-2">
-                        <div className="mb-1 text-[9px] uppercase tracking-wider text-violet-400">Nora</div>
-                        <p className="text-[11px] leading-relaxed text-zinc-300 whitespace-pre-line">
+                      <div style={{
+                        marginTop: 10, borderRadius: 8,
+                        border: "1px solid var(--accent-ring)",
+                        background: "var(--accent-soft)",
+                        padding: "8px 12px",
+                      }}>
+                        <div style={{ fontSize: 9, fontFamily: "var(--font-mono, ui-monospace)", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--accent)", marginBottom: 4, fontWeight: 600 }}>
+                          Nora
+                        </div>
+                        <p style={{ fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-muted)", margin: 0, whiteSpace: "pre-line" }}>
                           {explanation}
                         </p>
                       </div>
                     )}
-                  </li>
+                  </div>
                 );
               })
             )}
-          </ul>
+          </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
-function SummaryStat({
-  label,
-  value,
-  tint,
-}: {
-  label: string;
-  value: number;
-  tint: "rose" | "amber" | "sky";
-}) {
-  const ring =
-    tint === "rose"
-      ? "border-rose-500/30"
-      : tint === "amber"
-      ? "border-amber-500/30"
-      : "border-sky-500/30";
-  const text =
-    tint === "rose"
-      ? "text-rose-300"
-      : tint === "amber"
-      ? "text-amber-200"
-      : "text-sky-300";
+function TimelinePlaceholder({ findings }: { findings: AuditFinding[] }) {
+  const events = [...findings]
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 12)
+    .map((f) => ({
+      t: new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      sev: f.severity,
+      msg: f.message.slice(0, 60) + (f.message.length > 60 ? "…" : ""),
+    }));
+
+  if (events.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 200, gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>No events yet</div>
+        <div style={{ fontSize: 12, color: "var(--fg-muted)" }}>Run an audit to populate the timeline.</div>
+      </div>
+    );
+  }
 
   return (
-    <div className={`rounded-md border ${ring} bg-zinc-900/60 px-3 py-2`}>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-        {label}
-      </div>
-      <div className={`mt-0.5 font-mono text-[18px] font-semibold ${text}`}>
-        {value}
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      {events.map((e, i) => {
+        const s = SEV[e.sev as Severity] ?? SEV.low;
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10, color: "var(--fg-faint)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+              {e.t}
+            </span>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontFamily: "var(--font-mono, ui-monospace)", fontSize: 10, fontWeight: 600,
+              padding: "1px 6px", borderRadius: 999, lineHeight: 1, flexShrink: 0,
+              color: s.color, background: s.bg, border: `1px solid ${s.border}`,
+            }}>
+              <span style={{ width: 4, height: 4, borderRadius: 999, background: s.color, display: "inline-block" }} />
+              {e.sev}
+            </span>
+            <span style={{ fontSize: 11.5, color: "var(--fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {e.msg}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

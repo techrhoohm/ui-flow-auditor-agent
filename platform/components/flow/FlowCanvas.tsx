@@ -20,6 +20,7 @@ type Props = {
   onNodesChange?: OnNodesChange;
   onEdgesChange?: OnEdgesChange;
   onNodeClick?: (nodeId: string) => void;
+  colorMode?: "dark" | "light";
 };
 
 export function FlowCanvas({
@@ -28,6 +29,7 @@ export function FlowCanvas({
   onNodesChange,
   onEdgesChange,
   onNodeClick,
+  colorMode = "dark",
 }: Props) {
   const nodeTypes = useMemo(() => ({ screen: ScreenNode }), []);
 
@@ -45,7 +47,7 @@ export function FlowCanvas({
         maxZoom={2}
         fitViewOptions={{ padding: 0.15, minZoom: 0.05 }}
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={colorMode}
         nodesDraggable
         nodesConnectable={false}
         edgesFocusable={false}
@@ -57,7 +59,7 @@ export function FlowCanvas({
           variant={BackgroundVariant.Dots}
           gap={24}
           size={1}
-          color="#27272a"
+          color={colorMode === "light" ? "#00000015" : "#FFFFFF18"}
         />
         <Controls
           position="bottom-right"

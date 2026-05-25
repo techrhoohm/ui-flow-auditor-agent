@@ -478,11 +478,16 @@ export function AgentPanel({ onClose, onLoadIntoCanvas }: Props) {
 
   return (
     <motion.div
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
-      transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-zinc-800 bg-zinc-950 shadow-2xl sm:w-80"
+      initial={{ x: 380, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 380, opacity: 0 }}
+      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+      style={{
+        width: 380, flexShrink: 0, display: "flex", flexDirection: "column",
+        height: "100%", overflowY: "auto",
+        background: "var(--bg-elev)",
+        borderLeft: "1px solid var(--border)",
+      }}
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
