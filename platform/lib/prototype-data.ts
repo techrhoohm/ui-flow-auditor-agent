@@ -14,6 +14,8 @@ export interface HistoryItem {
   time: string;
   dur: string;
   badges: Array<{ sev: 'high' | 'med' | 'low'; count: number }>;
+  source?: 'url' | 'agent';
+  siteUrls?: string[]; // agent run group: all site hostnames
 }
 
 export interface Finding {
@@ -115,6 +117,7 @@ export const HISTORY: HistoryItem[] = [
     time: '08:14',
     dur: '14m 03s',
     badges: [{ sev: 'high', count: 9 }, { sev: 'med', count: 14 }, { sev: 'low', count: 6 }],
+    source: 'agent',
   },
   {
     id: 'h2',

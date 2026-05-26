@@ -61,6 +61,7 @@ interface StoredSession {
   realFindings: RealFinding[];
   elementMap: Record<string, ClickableElement[]>;
   annotationsMap: Record<string, ManualAnnotation[]>;
+  agentSites?: AgentSite[]; // present for grouped agent-run history entries
 }
 
 /* ─────────────────────────── helpers ─────────────────────────────────── */
@@ -121,9 +122,9 @@ function buildTreeFromApiNodes(
   return { id: 'root', tag: 'Entry', label: 'Site', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: roots };
 }
 
-function buildTreeFromCrawlResult(cr: BackendRun['crawlResult']): TreeNode {
+function buildTreeFromCrawlResult(cr: BackendRun['crawlResult'], prefix = ''): TreeNode {
   if (!cr || cr.nodes.length === 0) {
-    return { id: 'empty', tag: 'Entry', label: 'No pages', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+    return { id: prefix + 'empty', tag: 'Entry', label: 'No pages', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
   }
   const defectsMap: Record<string, { ux: number; ui: number; a11y: number }> = {};
   for (const f of cr.findings) {
@@ -137,7 +138,7 @@ function buildTreeFromCrawlResult(cr: BackendRun['crawlResult']): TreeNode {
     let path = '/';
     try { path = new URL(n.url).pathname || '/'; } catch { /* keep '/' */ }
     nodeMap.set(n.id, {
-      id: n.id, tag: i === 0 ? 'Entry' : 'Page',
+      id: prefix + n.id, tag: i === 0 ? 'Entry' : 'Page',
       label: n.label, path, status: 'done',
       defects: defectsMap[n.id] || { ux: 0, ui: 0, a11y: 0 },
       children: [],
@@ -150,33 +151,33 @@ function buildTreeFromCrawlResult(cr: BackendRun['crawlResult']): TreeNode {
   }
   const roots = cr.nodes.filter(n => !childIds.has(n.id)).map(n => nodeMap.get(n.id)!).filter(Boolean);
   if (roots.length === 1) return roots[0];
-  return { id: 'root', tag: 'Entry', label: 'Site', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: roots };
+  return { id: prefix + 'root', tag: 'Entry', label: 'Site', path: '/', status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: roots };
 }
 
-function buildPartialTree(partialCrawl: BackendRun['partialCrawl']): TreeNode {
+function buildPartialTree(partialCrawl: BackendRun['partialCrawl'], prefix = ''): TreeNode {
   if (!partialCrawl || partialCrawl.length === 0) {
-    return { id: 'tmp', tag: 'Entry', label: 'Crawling…', path: '/', status: 'crawling', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+    return { id: prefix + 'tmp', tag: 'Entry', label: 'Crawling…', path: '/', status: 'crawling', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
   }
   const first = partialCrawl[0];
   let rootPath = '/';
   try { rootPath = new URL(first.url).pathname || '/'; } catch { /* keep '/' */ }
   return {
-    id: first.id, tag: 'Entry', label: first.label, path: rootPath, status: 'done',
+    id: prefix + first.id, tag: 'Entry', label: first.label, path: rootPath, status: 'done',
     defects: { ux: 0, ui: 0, a11y: 0 },
     children: partialCrawl.slice(1).map(p => {
       let path = '/';
       try { path = new URL(p.url).pathname || '/'; } catch { /* keep '/' */ }
-      return { id: p.id, tag: 'Page', label: p.label, path, status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
+      return { id: prefix + p.id, tag: 'Page', label: p.label, path, status: 'done', defects: { ux: 0, ui: 0, a11y: 0 }, children: [] };
     }),
   };
 }
 
-function convertRunToSite(run: BackendRun, target: UITarget): AgentSite {
+function convertRunToSite(run: BackendRun, target: UITarget, prefix = ''): AgentSite {
   const state: AgentSite['state'] = run.state === 'done'
     ? (run.issuesFound > 10 ? 'red' : run.issuesFound > 0 ? 'amber' : 'green')
     : run.state === 'error' ? 'red' : 'amber';
-  const tree = run.crawlResult ? buildTreeFromCrawlResult(run.crawlResult)
-    : buildPartialTree(run.partialCrawl);
+  const tree = run.crawlResult ? buildTreeFromCrawlResult(run.crawlResult, prefix)
+    : buildPartialTree(run.partialCrawl, prefix);
   let hostname = target.url;
   try { hostname = new URL(target.url.startsWith('http') ? target.url : 'https://' + target.url).hostname; } catch { /* keep raw */ }
   return {
@@ -334,14 +335,26 @@ function Sidebar({ activeId, setActiveId, crawlStats, historyItems, onRestoreSes
 }
 
 function HistoryItemCard({ item, active, onClick }: { item: HistoryItem; active: boolean; onClick: () => void }) {
+  const isGroup = item.source === 'agent' && item.siteUrls && item.siteUrls.length > 1;
   return (
-    <div className={'history-item ' + (active ? 'active' : '')} onClick={onClick}>
+    <div className={'history-item ' + (active ? 'active' : '') + (item.source === 'agent' ? ' agent-run' : '')} onClick={onClick}>
       <div className="history-row">
-        <div className="history-url"><span className="scheme">url · </span>{item.url}</div>
+        <div className="history-url">
+          <span className="scheme">{item.source === 'agent' ? 'agent · ' : 'url · '}</span>
+          {item.url}
+        </div>
         <div className="history-time">{item.time}</div>
       </div>
+      {isGroup && (
+        <div className="history-sites">
+          {item.siteUrls!.map(u => <span key={u} className="history-site-chip">{u}</span>)}
+        </div>
+      )}
       <div className="history-meta">
         <div className="badges">
+          {item.source === 'agent' && (
+            <span className="badge agent"><span className="b-dot"/>agent</span>
+          )}
           {item.badges.map((b, i) => (
             <span key={i} className={'badge ' + b.sev}><span className="b-dot"/>{b.count}</span>
           ))}
@@ -558,12 +571,16 @@ interface CanvasProps {
   agentSites: AgentSite[];
   agentRunning: boolean;
   screenshotMap: Record<string, string>;
+  hasLastRun: boolean;
+  onCompare: () => void;
+  onRerun: () => void;
 }
 
 function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onToggle,
                   isAuditing, runMode, setRunMode, crawlProgress,
                   discoveredIds, statusOverrides, defectOverrides,
-                  agentSites, agentRunning, screenshotMap }: CanvasProps) {
+                  agentSites, agentRunning, screenshotMap,
+                  hasLastRun, onCompare, onRerun }: CanvasProps) {
   const [zoom, setZoom] = useState(100);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -679,8 +696,12 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
               <span>{displaySites.length} site{displaySites.length === 1 ? '' : 's'}</span>
             </div>
             <div className="run-banner-actions">
-              <button className="btn btn-sm">Compare to last run</button>
-              <button className="btn btn-sm btn-primary"><IcPlay w={10} h={10}/> Re-run</button>
+              <button className="btn btn-sm" onClick={onCompare} disabled={!hasLastRun}>
+                Compare to last run
+              </button>
+              <button className="btn btn-sm btn-primary" onClick={onRerun} disabled={agentRunning}>
+                <IcPlay w={10} h={10}/> Re-run
+              </button>
             </div>
           </div>
         )}
@@ -1385,6 +1406,175 @@ function AgentPanel({ onClose, onRunNow, isRunning, targets, setTargets }: Agent
   );
 }
 
+/* ─────────────────────────── CompareModal ───────────────────────────────── */
+
+function flatPages(node: TreeNode): TreeNode[] {
+  return [node, ...(node.children ?? []).flatMap(flatPages)];
+}
+
+function normalizeHost(url: string): string {
+  try { return new URL(url.startsWith('http') ? url : 'https://' + url).hostname; } catch { return url; }
+}
+
+interface SiteDiff {
+  name: string; url: string; host: string;
+  prev: AgentSite | null; curr: AgentSite | null;
+}
+
+function buildSiteDiffs(curr: AgentSite[], prev: AgentSite[]): SiteDiff[] {
+  const hosts = Array.from(new Set([...curr, ...prev].map(s => normalizeHost(s.url))));
+  return hosts.map(host => {
+    const c = curr.find(s => normalizeHost(s.url) === host) ?? null;
+    const p = prev.find(s => normalizeHost(s.url) === host) ?? null;
+    return { name: (c ?? p)!.name, url: (c ?? p)!.url, host, prev: p, curr: c };
+  });
+}
+
+function DiffLine({ kind, sign, path, label, ux, ui, a11y }: {
+  kind: 'added' | 'removed' | 'changed-old' | 'changed-new' | 'unchanged';
+  sign: string; path: string; label: string; ux: number; ui: number; a11y: number;
+}) {
+  return (
+    <div className={'diff-line diff-' + kind}>
+      <span className="diff-sign">{sign}</span>
+      <span className="diff-path">{path}</span>
+      <span className="diff-label">{label}</span>
+      <span className="diff-defects">
+        {ux > 0   && <span className="dp dp-ux">UX·{ux}</span>}
+        {ui > 0   && <span className="dp dp-ui">UI·{ui}</span>}
+        {a11y > 0 && <span className="dp dp-a11y">A11Y·{a11y}</span>}
+        {ux + ui + a11y === 0 && <span className="dp dp-clean">clean</span>}
+      </span>
+    </div>
+  );
+}
+
+function SiteDiffView({ diff }: { diff: SiteDiff }) {
+  const { prev, curr } = diff;
+
+  if (!prev && curr) {
+    return (
+      <div className="diff-view">
+        <div className="diff-file-hdr"><span className="diff-file-lbl">+++ {curr.url}</span><span className="diff-file-meta new-site">NEW SITE</span></div>
+        <div className="diff-hunk">@@ +{flatPages(curr.tree).length} pages · +{curr.findings} findings</div>
+        {flatPages(curr.tree).map(p => (
+          <DiffLine key={p.id} kind="added" sign="+" path={p.path} label={p.label}
+            ux={p.defects.ux} ui={p.defects.ui} a11y={p.defects.a11y}/>
+        ))}
+      </div>
+    );
+  }
+
+  if (prev && !curr) {
+    return (
+      <div className="diff-view">
+        <div className="diff-file-hdr"><span className="diff-file-lbl">--- {prev.url}</span><span className="diff-file-meta removed-site">SITE REMOVED</span></div>
+        <div className="diff-hunk">@@ -{flatPages(prev.tree).length} pages · -{prev.findings} findings</div>
+        {flatPages(prev.tree).map(p => (
+          <DiffLine key={p.id} kind="removed" sign="-" path={p.path} label={p.label}
+            ux={p.defects.ux} ui={p.defects.ui} a11y={p.defects.a11y}/>
+        ))}
+      </div>
+    );
+  }
+
+  if (!prev || !curr) return null;
+
+  const prevByPath = new Map(flatPages(prev.tree).map(p => [p.path, p]));
+  const currByPath = new Map(flatPages(curr.tree).map(p => [p.path, p]));
+  const allPaths = Array.from(new Set([...prevByPath.keys(), ...currByPath.keys()]));
+  const fd = curr.findings - prev.findings;
+  const pd = curr.pages - prev.pages;
+
+  return (
+    <div className="diff-view">
+      <div className="diff-file-hdr">
+        <span className="diff-file-lbl">--- {prev.url}</span>
+        <span className="diff-file-meta">{prev.pages} pages · {prev.findings} findings · {prev.state}</span>
+      </div>
+      <div className="diff-file-hdr">
+        <span className="diff-file-lbl">+++ {curr.url}</span>
+        <span className="diff-file-meta">{curr.pages} pages · {curr.findings} findings · {curr.state}</span>
+      </div>
+      <div className="diff-hunk">
+        @@ pages {prev.pages} → {curr.pages} ({pd >= 0 ? '+' : ''}{pd}){'  '}
+        findings {prev.findings} → {curr.findings} ({fd >= 0 ? '+' : ''}{fd})
+      </div>
+      {allPaths.map(path => {
+        const p = prevByPath.get(path), c = currByPath.get(path);
+        if (p && !c) return (
+          <DiffLine key={path} kind="removed" sign="-" path={path} label={p.label}
+            ux={p.defects.ux} ui={p.defects.ui} a11y={p.defects.a11y}/>
+        );
+        if (!p && c) return (
+          <DiffLine key={path} kind="added" sign="+" path={path} label={c.label}
+            ux={c.defects.ux} ui={c.defects.ui} a11y={c.defects.a11y}/>
+        );
+        if (p && c) {
+          const same = p.defects.ux === c.defects.ux && p.defects.ui === c.defects.ui && p.defects.a11y === c.defects.a11y;
+          if (same) return (
+            <DiffLine key={path} kind="unchanged" sign=" " path={path} label={c.label}
+              ux={c.defects.ux} ui={c.defects.ui} a11y={c.defects.a11y}/>
+          );
+          return (
+            <div key={path}>
+              <DiffLine kind="changed-old" sign="-" path={path} label={p.label}
+                ux={p.defects.ux} ui={p.defects.ui} a11y={p.defects.a11y}/>
+              <DiffLine kind="changed-new" sign="+" path={path} label={c.label}
+                ux={c.defects.ux} ui={c.defects.ui} a11y={c.defects.a11y}/>
+            </div>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function CompareModal({ current, previous, onClose }: {
+  current: AgentSite[]; previous: AgentSite[]; onClose: () => void;
+}) {
+  const diffs = buildSiteDiffs(current, previous);
+  const [selected, setSelected] = useState(diffs[0]?.host ?? '');
+  const diff = diffs.find(d => d.host === selected) ?? diffs[0];
+
+  function tabDot(d: SiteDiff) {
+    if (!d.curr) return 'removed';
+    if (!d.prev) return 'added';
+    if (d.curr.findings > d.prev.findings) return 'worse';
+    if (d.curr.findings < d.prev.findings) return 'better';
+    return 'neutral';
+  }
+
+  return (
+    <div className="fm-backdrop" onClick={onClose}>
+      <div className="compare-modal" onClick={e => e.stopPropagation()}>
+        <div className="compare-head">
+          <div>
+            <div className="compare-kicker">Diff · {diffs.length} site{diffs.length !== 1 ? 's' : ''}</div>
+            <div className="compare-title">Compare to last run</div>
+          </div>
+          <button className="compare-close" onClick={onClose} aria-label="Close"><IcClose w={14} h={14}/></button>
+        </div>
+
+        <div className="compare-tabs">
+          {diffs.map(d => (
+            <button key={d.host} className={'compare-tab ' + (d.host === selected ? 'on' : '')}
+              onClick={() => setSelected(d.host)}>
+              <span className={'compare-tab-dot td-' + tabDot(d)}/>
+              {d.name}
+            </button>
+          ))}
+        </div>
+
+        <div className="compare-body">
+          {diff && <SiteDiffView diff={diff}/>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────── App ─────────────────────────────────────── */
 
 interface Session {
@@ -1414,6 +1604,10 @@ export default function Page() {
   const [agentSites, setAgentSites] = useState<AgentSite[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
+  const [lastAgentSites, setLastAgentSites] = useState<AgentSite[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  // Ref so runAgentTargets can read agentSites without stale closure
+  const agentSitesRef = useRef<AgentSite[]>([]);
 
   // Lifted agent targets — start empty so only user-added sites run
   const [agentTargets, setAgentTargets] = useState<UITarget[]>([]);
@@ -1436,6 +1630,7 @@ export default function Page() {
   const auditAbortRef = useRef<{ cancelled: boolean } | null>(null);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
+  useEffect(() => { agentSitesRef.current = agentSites; }, [agentSites]);
 
   // Load persisted history + sessions from IndexedDB on mount
   useEffect(() => {
@@ -1471,7 +1666,8 @@ export default function Page() {
     findings: RealFinding[],
     shots: Record<string, string>,
     elMap: Record<string, ClickableElement[]> = {},
-    vids: Record<string, string> = {}
+    vids: Record<string, string> = {},
+    source: 'url' | 'agent' = 'url'
   ) => {
     const high = findings.filter(f => f.severity === 'high').length;
     const med  = findings.filter(f => f.severity === 'medium').length;
@@ -1488,6 +1684,7 @@ export default function Page() {
       time: fmtNow(),
       dur: fmtDur(durationMs),
       badges,
+      source,
     };
 
     const storedSession: StoredSession = {
@@ -1690,6 +1887,7 @@ export default function Page() {
     setRunMode('multi');
     setAgentOpen(false);
     setShowPanel(false);
+    if (agentSitesRef.current.length > 0) setLastAgentSites([...agentSitesRef.current]);
     setAgentSites([]);
 
     // Placeholder sites: show all targets as amber/crawling while running
@@ -1723,8 +1921,9 @@ export default function Page() {
                 const siteHost = site.url.replace(/^https?:\/\//, '').replace(/^www\./, '');
                 const runHost = run.url.replace(/^https?:\/\//, '').replace(/^www\./, '');
                 if (siteHost !== runHost && site.id !== run.targetId) return site;
-                const target = targets.find(t => t.id === run.targetId || t.url.includes(runHost)) || targets[0];
-                return convertRunToSite(run, target);
+                const target = targets.find(t => t.id === run.targetId || t.url.includes(runHost));
+                if (!target) return site;
+                return convertRunToSite(run, target, target.id + '_');
               }));
             } catch { /* skip malformed */ }
           }
@@ -1760,73 +1959,101 @@ export default function Page() {
       const results = await Promise.all(runPromises);
       abort.abort(); // close SSE
 
-      // Build final site list from results
+      // Build final site list from results — keep run+target+prefix together to avoid
+      // index drift when some runs fail.
       const finalSites: AgentSite[] = [];
-      const allRuns: BackendRun[] = [];
+      type RunPair = { run: BackendRun; target: UITarget; prefix: string };
+      const runPairs: RunPair[] = [];
 
       results.forEach((res, i) => {
         const run = res.runs?.[0];
+        const prefix = targets[i].id + '_';
         if (run) {
-          allRuns.push(run);
-          finalSites.push(convertRunToSite(run, targets[i]));
+          runPairs.push({ run, target: targets[i], prefix });
+          finalSites.push(convertRunToSite(run, targets[i], prefix));
         } else {
-          // Keep placeholder as red/error
           finalSites.push({ ...placeholders[i], state: 'red' });
         }
       });
 
       setAgentSites(finalSites);
 
-      // Collect screenshots from all runs into screenshotMap so Annotate works
+      // Collect screenshots from all runs into screenshotMap so Annotate works.
+      // Keys are prefixed so nodes from different sites never collide.
       const agentShots: Record<string, string> = {};
-      for (const run of allRuns) {
+      for (const { run, prefix } of runPairs) {
         for (const n of run.crawlResult?.nodes || []) {
-          if (n.screenshot) agentShots[n.id] = n.screenshot;
+          if (n.screenshot) agentShots[prefix + n.id] = n.screenshot;
         }
         for (const p of run.partialCrawl || []) {
-          if (p.screenshot) agentShots[p.id] = p.screenshot;
+          if (p.screenshot) agentShots[prefix + p.id] = p.screenshot;
         }
       }
       if (Object.keys(agentShots).length > 0) {
         setScreenshotMap(prev => ({ ...prev, ...agentShots }));
       }
 
-      // Add each run to history
-      const t0 = Date.now();
-      for (let i = 0; i < allRuns.length; i++) {
-        const run = allRuns[i];
-        const target = targets[i];
-        if (!run) continue;
+      // Aggregate all runs into a single grouped history entry
+      const runStart = runPairs.length > 0 && runPairs[0].run.startedAt ? runPairs[0].run.startedAt : Date.now();
+      const runEnd   = runPairs.length > 0 && runPairs[runPairs.length - 1].run.updatedAt
+        ? runPairs[runPairs.length - 1].run.updatedAt! : Date.now();
+      const totalDur = runEnd - runStart;
 
-        const findings: RealFinding[] = (run.crawlResult?.findings || []).map(f => ({
-          nodeId: f.nodeId,
+      const allFindings: RealFinding[] = runPairs.flatMap(({ run, prefix }) =>
+        (run.crawlResult?.findings || []).map(f => ({
+          nodeId: prefix + f.nodeId,
           nodeLabel: f.nodeLabel,
           severity: (f.severity === 'medium' ? 'medium' : f.severity) as RealFinding['severity'],
           message: f.message,
           rule: f.rule,
-        }));
+        }))
+      );
 
-        const shots: Record<string, string> = {};
-        for (const n of run.crawlResult?.nodes || []) {
-          if (n.screenshot) shots[n.id] = n.screenshot;
-        }
+      const high = allFindings.filter(f => f.severity === 'high').length;
+      const med  = allFindings.filter(f => f.severity === 'medium').length;
+      const low  = allFindings.filter(f => f.severity === 'low').length;
+      const badges: HistoryItem['badges'] = [];
+      if (high > 0) badges.push({ sev: 'high', count: high });
+      if (med  > 0) badges.push({ sev: 'med',  count: med  });
+      if (low  > 0) badges.push({ sev: 'low',  count: low  });
 
-        const tree = run.crawlResult ? buildTreeFromCrawlResult(run.crawlResult) : finalSites[i].tree;
-        let hostname = target.url;
-        try { hostname = new URL(target.url.startsWith('http') ? target.url : 'https://' + target.url).hostname; } catch { /* keep raw */ }
+      const siteUrls = runPairs.map(({ target }) => {
+        try { return new URL(target.url.startsWith('http') ? target.url : 'https://' + target.url).hostname; } catch { return target.url; }
+      });
 
-        const agentSession: Session = {
-          host: hostname, label: hostname.split('.')[0],
-          sessionId: run.runId, tree,
-        };
+      const groupId = 'agent-' + Date.now();
+      const primaryHost = siteUrls[0] ?? 'agent run';
+      const groupItem: HistoryItem = {
+        id: groupId,
+        url: siteUrls.length === 1 ? primaryHost : `${siteUrls.length} sites`,
+        time: fmtNow(),
+        dur: fmtDur(totalDur),
+        badges,
+        source: 'agent',
+        siteUrls,
+      };
 
-        const dur = run.updatedAt && run.startedAt ? run.updatedAt - run.startedAt : Date.now() - t0;
-        const agentHistoryId = addToHistory(target.url, agentSession, dur, findings, shots);
+      const primaryTree = finalSites[0]?.tree ?? { id: groupId + '_root', tag: 'Entry' as const, label: 'No pages', path: '/', status: 'done' as const, defects: { ux: 0, ui: 0, a11y: 0 } };
+      const groupSession: Session = { host: primaryHost, label: primaryHost.split('.')[0], sessionId: groupId, tree: primaryTree };
 
-        // Generate AI wireframes for this target's screenshots
-        if (Object.keys(shots).length > 0) {
-          generateWireframes(shots, agentHistoryId);
-        }
+      const groupStored: StoredSession = {
+        session: groupSession,
+        screenshotMap: agentShots,
+        wireframeMap: {},
+        videoMap: {},
+        realFindings: allFindings,
+        elementMap: {},
+        annotationsMap: {},
+        agentSites: finalSites,
+      };
+
+      sessionStoreRef.current.set(groupId, groupStored);
+      dbSet('canvas-session', groupId, groupStored).catch(() => {});
+      setHistoryItems(prev => [groupItem, ...prev].slice(0, 20));
+      setActiveHistory(groupId);
+
+      if (Object.keys(agentShots).length > 0) {
+        generateWireframes(agentShots, groupId);
       }
 
     } catch (err) {
@@ -1843,20 +2070,32 @@ export default function Page() {
   const restoreSession = useCallback((historyId: string) => {
     const stored = sessionStoreRef.current.get(historyId);
     if (!stored) return;
-    setSession(stored.session);
-    setSelectedNodeId(stored.session.tree.id);
+
     setScreenshotMap(stored.screenshotMap);
     setWireframeMap(stored.wireframeMap || {});
-    setVideoMap(stored.videoMap || {});
     setRealFindings(stored.realFindings);
-    setElementMap(stored.elementMap || {});
     setAnnotationsMap(stored.annotationsMap || {});
-    setDiscoveredIds(null);
-    setStatusOverrides({});
-    setDefectOverrides({});
-    setRunMode('single');
-    setShowPanel(true);
+    setShowPanel(false);
     setAgentOpen(false);
+
+    if (stored.agentSites && stored.agentSites.length > 0) {
+      // Grouped agent run — restore multi-site canvas
+      setAgentSites(stored.agentSites);
+      setSelectedNodeId(stored.agentSites[0].tree.id);
+      setRunMode('multi');
+    } else {
+      // Single URL audit
+      setSession(stored.session);
+      setSelectedNodeId(stored.session.tree.id);
+      setVideoMap(stored.videoMap || {});
+      setElementMap(stored.elementMap || {});
+      setDiscoveredIds(null);
+      setStatusOverrides({});
+      setDefectOverrides({});
+      setAgentSites([]);
+      setRunMode('single');
+      setShowPanel(true);
+    }
   }, []);
 
   /* ─── Crawl stats ─────────────────────────────────────────────────── */
@@ -1930,6 +2169,34 @@ export default function Page() {
           agentSites={agentSites}
           agentRunning={agentRunning}
           screenshotMap={screenshotMap}
+          hasLastRun={agentSites.length > 0}
+          onCompare={() => {
+            // Try to seed previous run from history if we don't have it yet
+            if (lastAgentSites.length === 0) {
+              const agentItems = historyItems.filter(h => h.source === 'agent');
+              // Skip items from the current run (same timestamps as current agentSites IDs)
+              const currentIds = new Set(agentSites.map(s => s.id));
+              const prevSites: AgentSite[] = [];
+              for (const h of agentItems) {
+                const stored = sessionStoreRef.current.get(h.id);
+                if (!stored) continue;
+                const siteId = stored.session.sessionId;
+                if (currentIds.has(siteId)) continue;
+                const host = stored.session.host;
+                if (prevSites.some(s => normalizeHost(s.url) === host)) continue;
+                prevSites.push({
+                  id: siteId, name: stored.session.label, url: stored.session.host,
+                  env: 'production', state: 'amber',
+                  pages: flatPages(stored.session.tree).length,
+                  findings: stored.realFindings.length,
+                  tree: stored.session.tree,
+                });
+              }
+              if (prevSites.length > 0) setLastAgentSites(prevSites);
+            }
+            setCompareOpen(true);
+          }}
+          onRerun={() => runAgentTargets(agentTargets)}
         />
         {agentOpen
           ? <AgentPanel
@@ -1955,6 +2222,9 @@ export default function Page() {
               />
             : null}
       </div>
+      {compareOpen && agentSites.length > 0 && (
+        <CompareModal current={agentSites} previous={lastAgentSites} onClose={() => setCompareOpen(false)}/>
+      )}
       {folderOpen && <FolderMenu onClose={() => setFolderOpen(false)} onStartWebAudit={u => { setFolderOpen(false); startAudit(u); }}/>}
       {annotatingNode && (
         <AnnotationEditor
