@@ -587,6 +587,45 @@ async function visit(
   const title = (await page.title()) || "(untitled)";
   const finalUrl = page.url();
 
+  // ── Early block / blank detection ────────────────────────────────────
+  // Run BEFORE the expensive scroll + axe pass so we don't burn 10–20s on
+  // a Cloudflare challenge page or a spinner that never resolves.
+  const earlyCheck = await page.evaluate(() => {
+    const text = (document.body?.innerText ?? "").trim();
+    const richEls = document.querySelectorAll(
+      "div, section, article, main, p, h1, h2, h3, ul, ol, table"
+    ).length;
+    return { textLen: text.length, richEls, snippet: text.slice(0, 2000) };
+  }).catch(() => ({ textLen: 0, richEls: 0, snippet: "" }));
+
+  const combined = `${title}\n${earlyCheck.snippet}`;
+  const blockedMatch = BLOCK_PATTERNS.find((re) => re.test(combined));
+  // Blank = fewer than 200 chars of visible text AND fewer than 8 rich elements
+  const isBlank = earlyCheck.textLen < 200 && earlyCheck.richEls < 8;
+
+  if (blockedMatch || isBlank) {
+    // Take a quick viewport-only screenshot so the canvas still shows something
+    let screenshot: string | null = null;
+    try {
+      const buf = await page.screenshot({ type: "jpeg", quality: 65, fullPage: false });
+      screenshot = `data:image/jpeg;base64,${buf.toString("base64")}`;
+    } catch { /* best-effort */ }
+
+    const msg = blockedMatch
+      ? `Bot protection detected — site served a block/captcha page (matched "${blockedMatch.source}"). Audit skipped to avoid burning timeout.`
+      : `Page rendered with minimal content (${earlyCheck.textLen} chars, ${earlyCheck.richEls} elements) — likely blank, redirected to a login wall, or still loading. Audit skipped.`;
+
+    return {
+      finalUrl,
+      title,
+      screenshot,
+      sameOriginLinks: [],
+      findings: [{ rule: "automation-blocked", severity: "high" as const, message: msg, line: 1 }],
+      elements: [],
+    };
+  }
+  // ─────────────────────────────────────────────────────────────────────
+
   // Scroll to trigger lazy loading before screenshot
   await page.evaluate(async () => {
     await new Promise<void>((resolve) => {
@@ -619,29 +658,6 @@ async function visit(
     } catch {
       screenshot = null;
     }
-  }
-
-  const bodyText = await page
-    .evaluate(() => document.body?.innerText?.slice(0, 4000) ?? "")
-    .catch(() => "");
-  const combined = `${title}\n${bodyText}`;
-  const blockedMatch = BLOCK_PATTERNS.find((re) => re.test(combined));
-  if (blockedMatch) {
-    return {
-      finalUrl,
-      title,
-      screenshot,
-      sameOriginLinks: [],
-      findings: [
-        {
-          rule: "automation-blocked",
-          severity: "high",
-          message: `Site detected the headless browser and served a block / captcha page (matched "${blockedMatch.source}"). Audit results are not reliable until the request is allowed.`,
-          line: 1,
-        },
-      ],
-      elements: [],
-    };
   }
 
   // Improved link extraction: <a href>, [data-href], [href] on any element, router-link

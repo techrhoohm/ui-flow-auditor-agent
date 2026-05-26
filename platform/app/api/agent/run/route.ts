@@ -108,6 +108,8 @@ async function runTarget(
     run.partialCrawl = [];
     const crawl = await crawlSite(parsed.toString(), {
       maxPages: 6,
+      perPageTimeoutMs: 20000,  // 2× the Vercel default — heavy SPAs need this
+      totalTimeoutMs: 110000,   // stay under the 120s function hard-kill limit
       onPage: async (page, count) => {
         let path = page.url;
         try { path = new URL(page.url).pathname || "/"; } catch { /* keep raw */ }
