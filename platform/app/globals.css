@@ -321,8 +321,11 @@ body {
     radial-gradient(circle at 1px 1px, var(--canvas-dot) 1px, transparent 1px);
   background-size: 14px 14px;
   background-color: var(--bg-canvas);
-  overflow: auto;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
 }
+.canvas.is-panning { cursor: grabbing; }
 .canvas-inner {
   min-width: 100%;
   min-height: 100%;
@@ -332,7 +335,7 @@ body {
 }
 .canvas-inner:has(.multi-stage) {
   justify-content: flex-start;
-  align-items: stretch;
+  align-items: flex-start;
   flex-direction: column;
   gap: 16px;
 }
@@ -668,6 +671,8 @@ html[data-theme="light"] .nora-fig {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 .preview-seg { width: auto; padding: 2px; }
 .preview-seg .seg-btn { padding: 4px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
@@ -682,6 +687,8 @@ html[data-theme="light"] .nora-fig {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: color .12s, border-color .12s, background .12s;
 }
 .chip-btn:hover { color: var(--fg); border-color: var(--border-strong); }
@@ -714,54 +721,249 @@ html[data-theme="light"] .nora-fig {
 }
 .preview-img.no-annot svg g:last-child { display: none; }
 
-/* hotspot overlay — subtle dashed outlines, no fill */
-.hotspot-layer {
-  position: absolute; inset: 0;
-  pointer-events: none; z-index: 3;
-}
-.hs-rect {
+/* Read-only annotation overlay on preview card */
+.ann-preview-svg {
   position: absolute;
-  border: 1.5px dashed;
-  background: transparent;
-  box-sizing: border-box;
-  pointer-events: auto;
-  cursor: default;
-  transition: background .12s;
-}
-/* hover: brief ghost fill so element stands out */
-.hs-rect:hover { background: color-mix(in oklab, currentColor 6%, transparent); }
-
-/* Severity-based (findings) */
-.hs-rect.hs-high { border-color: color-mix(in oklab, var(--sev-high) 70%, transparent); color: var(--sev-high); }
-.hs-rect.hs-med  { border-color: color-mix(in oklab, var(--sev-med)  70%, transparent); color: var(--sev-med);  }
-.hs-rect.hs-low  { border-color: color-mix(in oklab, var(--sev-low)  70%, transparent); color: var(--sev-low);  }
-.hs-rect.hs-clean {
-  border-color: color-mix(in oklab, var(--fg-faint) 50%, transparent);
-  color: var(--fg-faint);
-  border-style: dotted;
-}
-
-/* Element-type hotspots — each a distinct subtle hue */
-.hs-rect.hs-button { border-color: rgba(16,185,129,.6);  color: #10b981; } /* green  */
-.hs-rect.hs-nav    { border-color: rgba(99,102,241,.55); color: #6366f1; } /* indigo */
-.hs-rect.hs-link   { border-color: rgba(59,130,246,.5);  color: #3b82f6; } /* blue   */
-.hs-rect.hs-card   { border-color: rgba(245,158,11,.55); color: #f59e0b; } /* amber  */
-
-/* tiny inline type badge — sits inside the top-left corner */
-.hs-rect-label {
-  position: absolute;
-  top: 2px; left: 2px;
-  font-family: var(--font-mono);
-  font-size: 8px; font-weight: 700;
-  line-height: 1;
-  color: currentColor;
-  opacity: 0.75;
-  white-space: nowrap;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  letter-spacing: .02em;
 }
 
-.preview-img.no-annot .hotspot-layer { display: none; }
+/* === Annotation Editor Modal ============================================== */
+.anneditor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(3px);
+}
+
+.anneditor-modal {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.48);
+  overflow: hidden;
+  max-width: 92vw;
+  max-height: 94vh;
+  min-width: 560px;
+}
+
+.anneditor-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.anneditor-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.anneditor-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.anntool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.anntool:hover { background: var(--bg-sunk); color: var(--fg); }
+.anntool.on { background: var(--accent-soft); border-color: var(--accent-ring); color: var(--accent); }
+
+.annpalette {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.anncolor {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform .1s, border-color .1s;
+  flex-shrink: 0;
+}
+.anncolor:hover { transform: scale(1.15); }
+.anncolor.on { border-color: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3); transform: scale(1.15); }
+
+.annlabel-input {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunk);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  width: 110px;
+  outline: none;
+  transition: border-color .12s;
+}
+.annlabel-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.annlabel-input::placeholder { color: var(--fg-faint); }
+
+.annbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, border-color .12s;
+}
+.annbtn:hover:not(:disabled) { background: var(--bg-sunk); border-color: var(--border-strong); }
+.annbtn:disabled { opacity: .4; cursor: not-allowed; }
+
+.annbtn-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.annbtn-save:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 85%, #fff); border-color: var(--accent); }
+
+.anneditor-stage {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-sunk);
+  padding: 32px;
+  min-height: 0;
+  /* use block layout so the frame can be auto-centered with margin: auto */
+}
+
+.anneditor-frame {
+  position: relative;
+  display: block;
+  margin: 0 auto;
+  line-height: 0;
+  /* width is set inline via JS (BASE_W * zoom) */
+}
+
+/* screenshot image fills frame width, auto height preserves aspect ratio */
+.anneditor-bg-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* wireframe SVG fills frame width */
+.anneditor-bg-wire svg {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.anneditor-empty {
+  width: 100%;
+  min-height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-faint);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.anneditor-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.anneditor-hints {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+}
+
+.anneditor-hints kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 10px;
+  margin: 0 1px;
+}
+
+.ann-zoom-val {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  min-width: 38px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Inline label popup — appears next to newly drawn shape */
+.ann-label-popup {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.ann-label-popup-input {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  border: 1.5px solid var(--accent);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  width: 110px;
+  outline: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3), 0 0 0 3px var(--accent-ring);
+}
+.ann-label-popup-input::placeholder { color: var(--fg-faint); }
 
 /* severity grid */
 .sev-grid {
@@ -1149,6 +1351,7 @@ html[data-theme="light"] .nora-fig {
   background: var(--node-fill);
   border: 1px solid var(--border);
   border-radius: 14px;
+  cursor: pointer;
   box-shadow: var(--shadow-sm);
   overflow: hidden;
   cursor: pointer;
@@ -1662,14 +1865,18 @@ html[data-theme="light"] .nora-fig {
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 0;
   width: 760px;
+  height: fit-content;
+  /* clip the inner header to the card corners without clamping tree height */
+  isolation: isolate;
 }
 .site-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunk);
+  border-radius: 16px 16px 0 0;
 }
 .site-header-row { display: flex; align-items: center; gap: 14px; }
 .site-state-dot {
@@ -1709,7 +1916,8 @@ html[data-theme="light"] .nora-fig {
   padding: 32px 24px 36px;
   display: flex;
   justify-content: center;
-  overflow-x: auto;
+  overflow: visible;
+  min-width: 0;
 }
 
 .canvas-mode-seg {

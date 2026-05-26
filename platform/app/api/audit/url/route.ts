@@ -6,6 +6,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
+const IS_VERCEL = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
 type RequestBody = { url?: string; maxPages?: number };
 
 const SEVERITY_DURATION: Record<Severity, number> = {
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
   const maxPages = Math.min(Math.max(body.maxPages ?? 6, 1), 10);
 
   try {
-    const crawl = await crawlSite(parsed.toString(), { maxPages });
+    const crawl = await crawlSite(parsed.toString(), { maxPages, includeVideo: !IS_VERCEL });
     if (crawl.pages.length === 0) {
       return NextResponse.json(
         { error: `No pages could be loaded from ${parsed.origin}. The site may be blocking automated browsers (bot protection, CAPTCHA, or IP block). Try a different URL.` },
@@ -56,6 +58,7 @@ export async function POST(req: Request) {
       edges,
       screenshots,
       elementMap,
+      videoMap: crawl.videos ?? {},
       meta: {
         origin: crawl.origin,
         pagesScanned: crawl.pages.length,

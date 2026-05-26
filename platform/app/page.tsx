@@ -14,6 +14,8 @@ import { SITE_TREE, HISTORY, FINDINGS, AGENT_RUN } from '@/lib/prototype-data';
 import { makeTreeForUrl, bfsOrder, extractHost } from '@/lib/prototype-crawl';
 import { dbGet, dbSet, dbGetAll } from '@/lib/db';
 import type { ClickableElement } from '@/lib/url-crawler';
+import type { ManualAnnotation } from '@/lib/annotations';
+import { AnnotationEditor } from '@/components/canvas/AnnotationEditor';
 
 /* ─────────────────────────── local types ─────────────────────────────── */
 
@@ -55,8 +57,10 @@ interface StoredSession {
   session: Session;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
+  videoMap: Record<string, string>;
   realFindings: RealFinding[];
   elementMap: Record<string, ClickableElement[]>;
+  annotationsMap: Record<string, ManualAnnotation[]>;
 }
 
 /* ─────────────────────────── helpers ─────────────────────────────────── */
@@ -252,7 +256,7 @@ function Topbar({ theme, setTheme, url, setUrl, onAuditStart, isAuditing, onFold
           <button><span className="dot dot-accent"/> Sonnet 4.6 · balanced <IcCaret w={12} h={12} className="caret"/></button>
         </div>
         <button className="btn"><IcExport w={13} h={13}/> Export</button>
-        <button className={'btn ' + (isAuditing ? '' : 'btn-primary')} onClick={onAuditStart} disabled={isAuditing}>
+        <button className={'btn ' + (isAuditing ? '' : 'btn-primary')} onClick={() => onAuditStart()} disabled={isAuditing}>
           {isAuditing
             ? <><span className="spinner"/> Crawling…</>
             : <><IcPlay w={11} h={11}/> Start audit</>}
@@ -360,9 +364,11 @@ interface TreeNodeProps {
   statusOverrides: Record<string, string>;
   defectOverrides: Record<string, { ux: number; ui: number; a11y: number }>;
   screenshotMap: Record<string, string>;
+  nodeOffset?: { x: number; y: number };
+  onMoveNode?: (id: string, x: number, y: number) => void;
 }
 
-function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, discoveredIds, statusOverrides, defectOverrides, screenshotMap }: TreeNodeProps) {
+function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, discoveredIds, statusOverrides, defectOverrides, screenshotMap, nodeOffset, onMoveNode }: TreeNodeProps) {
   if (discoveredIds && !discoveredIds.has(node.id)) return null;
 
   const collapsed = collapsedIds.has(node.id);
@@ -374,11 +380,46 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
   const sev = defects.ux + defects.a11y > 4 ? 'high' : totalDefects > 2 ? 'med' : totalDefects > 0 ? 'low' : 'none';
   const realShot = screenshotMap[node.id];
 
+  /* drag-to-reposition */
+  const dragRef = useRef<{ pid: number; mx: number; my: number; ox: number; oy: number } | null>(null);
+  const didDragRef = useRef(false);
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || !onMoveNode) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+    dragRef.current = { pid: e.pointerId, mx: e.clientX, my: e.clientY, ox: nodeOffset?.x ?? 0, oy: nodeOffset?.y ?? 0 };
+    didDragRef.current = false;
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragRef.current || e.pointerId !== dragRef.current.pid) return;
+    const { mx, my, ox, oy } = dragRef.current;
+    const dx = e.clientX - mx, dy = e.clientY - my;
+    if (!didDragRef.current && Math.hypot(dx, dy) < 4) return;
+    didDragRef.current = true;
+    onMoveNode!(node.id, ox + dx, oy + dy);
+  }
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragRef.current || e.pointerId !== dragRef.current.pid) return;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    dragRef.current = null;
+  }
+  function onCardClick(e: React.MouseEvent) {
+    if (didDragRef.current) { didDragRef.current = false; return; }
+    onSelect(node.id);
+  }
+
   return (
-    <div className="tree-node-wrap">
+    <div
+      className="tree-node-wrap"
+      style={nodeOffset ? { transform: `translate(${nodeOffset.x}px,${nodeOffset.y}px)`, position: 'relative', zIndex: 1 } : undefined}
+    >
       <div
         className={'tree-card ' + (selectedId === node.id ? 'selected ' : '') + 'status-' + status}
-        onClick={() => onSelect(node.id)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onClick={onCardClick}
       >
         <div className="tree-card-top">
           <span className={'tag tag-' + node.tag.toLowerCase()}>{node.tag}</span>
@@ -426,7 +467,8 @@ function TreeNodeCard({ node, selectedId, onSelect, collapsedIds, onToggle, disc
             <TreeNodeCard key={c.id} node={c} selectedId={selectedId} onSelect={onSelect}
               collapsedIds={collapsedIds} onToggle={onToggle}
               discoveredIds={discoveredIds} statusOverrides={statusOverrides} defectOverrides={defectOverrides}
-              screenshotMap={screenshotMap}/>
+              screenshotMap={screenshotMap}
+              onMoveNode={onMoveNode}/>
           ))}
         </div>
       )}
@@ -523,17 +565,84 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
                   discoveredIds, statusOverrides, defectOverrides,
                   agentSites, agentRunning, screenshotMap }: CanvasProps) {
   const [zoom, setZoom] = useState(100);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [nodeOffsets, setNodeOffsets] = useState<Record<string, { x: number; y: number }>>({});
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const panStartRef = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
+  const panThresholdRef = useRef(false);
 
   const displaySites = agentSites.length > 0 ? agentSites : AGENT_RUN.sites;
 
+  function moveNode(id: string, x: number, y: number) {
+    setNodeOffsets(prev => ({ ...prev, [id]: { x, y } }));
+  }
+
+  /* wheel → zoom toward cursor (works with plain scroll and ctrl+scroll) */
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      setZoom(z => {
+        const newZ = Math.max(20, Math.min(300, z * factor));
+        const ratio = newZ / z;
+        setPan(p => ({ x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }));
+        return newZ;
+      });
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+
+  /* pan: drag on background (not on tree cards) */
+  function handleCanvasMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('.tree-card') || t.closest('.collapse-btn') ||
+        t.closest('.canvas-overlay-tr') || t.closest('.canvas-overlay-tl') ||
+        t.closest('.nora-anchor') || t.closest('.statusbar') || t.closest('.site-card')) return;
+    panStartRef.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y };
+    panThresholdRef.current = false;
+  }
+
+  function handleCanvasMouseMove(e: React.MouseEvent) {
+    if (!panStartRef.current) return;
+    const { mx, my, px, py } = panStartRef.current;
+    const dx = e.clientX - mx, dy = e.clientY - my;
+    if (!panThresholdRef.current) {
+      if (Math.hypot(dx, dy) < 4) return;
+      panThresholdRef.current = true;
+      setIsPanning(true);
+    }
+    setPan({ x: px + dx, y: py + dy });
+  }
+
+  function handleCanvasMouseUp() {
+    panStartRef.current = null;
+    panThresholdRef.current = false;
+    setIsPanning(false);
+  }
+
   return (
-    <div className="canvas">
+    <div
+      className={'canvas' + (isPanning ? ' is-panning' : '')}
+      ref={canvasRef}
+      onMouseDown={handleCanvasMouseDown}
+      onMouseMove={handleCanvasMouseMove}
+      onMouseUp={handleCanvasMouseUp}
+      onMouseLeave={handleCanvasMouseUp}
+    >
       <div className="canvas-overlay-tr">
         <div className="zoom-pill">
-          <button onClick={() => setZoom(z => Math.max(40, z - 10))} aria-label="Zoom out"><IcMinus w={12} h={12}/></button>
-          <span className="zoom-val">{zoom}%</span>
+          <button onClick={() => setZoom(z => Math.max(30, z - 10))} aria-label="Zoom out"><IcMinus w={12} h={12}/></button>
+          <span className="zoom-val">{Math.round(zoom)}%</span>
           <button onClick={() => setZoom(z => Math.min(200, z + 10))} aria-label="Zoom in"><IcPlus w={12} h={12}/></button>
-          <button onClick={() => setZoom(100)} aria-label="Fit"><IcMaximize w={12} h={12}/></button>
+          <button onClick={() => { setZoom(100); setPan({ x: 0, y: 0 }); setNodeOffsets({}); }} aria-label="Fit"><IcMaximize w={12} h={12}/></button>
         </div>
       </div>
 
@@ -577,7 +686,10 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
         )}
         <div
           className={runMode === 'multi' ? 'multi-stage' : 'tree-root'}
-          style={{ transform: `scale(${zoom / 100})`, transformOrigin: runMode === 'multi' ? 'top left' : 'top center' }}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom / 100})`,
+            transformOrigin: runMode === 'multi' ? 'top left' : 'top center',
+          }}
         >
           {runMode === 'single'
             ? <TreeNodeCard
@@ -590,6 +702,8 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
                 statusOverrides={statusOverrides}
                 defectOverrides={defectOverrides}
                 screenshotMap={screenshotMap}
+                nodeOffset={nodeOffsets[session.tree.id]}
+                onMoveNode={moveNode}
               />
             : displaySites.map(site => (
                 <SiteSection
@@ -633,86 +747,22 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
-// Fallback component zones in 1280×900 space (used when wireframe not yet loaded)
-const FALLBACK_RECTS = [
-  { x: 0,   y: 0,   w: 1280, h: 56  },
-  { x: 120, y: 90,  w: 1040, h: 130 },
-  { x: 320, y: 250, w: 180,  h: 46  },
-  { x: 520, y: 250, w: 180,  h: 46  },
-  { x: 80,  y: 370, w: 360,  h: 210 },
-  { x: 460, y: 370, w: 360,  h: 210 },
-  { x: 840, y: 370, w: 360,  h: 210 },
-  { x: 80,  y: 190, w: 1100, h: 46  },
-  { x: 0,   y: 830, w: 1280, h: 70  },
-  { x: 160, y: 600, w: 280,  h: 44  },
-  { x: 460, y: 600, w: 360,  h: 44  },
-];
-
-function parseWireframeRects(svg: string): Array<{x:number;y:number;w:number;h:number}> {
-  const out: Array<{x:number;y:number;w:number;h:number}> = [];
-  const re = /<rect\b([^/>'"]|"[^"]*"|'[^']*')*?\/?>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(svg)) !== null) {
-    const el = m[0];
-    const num = (attr: string) => parseFloat(el.match(new RegExp(`\\b${attr}="([^"]+)"`))?.[1] ?? '0');
-    const x = num('x'), y = num('y'), w = num('width'), h = num('height');
-    if (w > 50 && h > 18 && w < 1240 && h < 700) out.push({ x, y, w, h });
-  }
-  return out;
-}
-
-function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, nodeElements }: {
+function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFindings, nodeAnnotations, onAnnotate }: {
   node: TreeNode; host: string;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
+  videoMap: Record<string, string>;
   nodeFindings: RealFinding[];
-  nodeElements: ClickableElement[];
+  nodeAnnotations: ManualAnnotation[];
+  onAnnotate: (mode: 'screenshot' | 'wireframe') => void;
 }) {
-  const [view, setView] = useState<'screenshot' | 'wireframe'>('screenshot');
-  const [annotations, setAnnotations] = useState(true);
+  const [view, setView] = useState<'screenshot' | 'wireframe' | 'video'>('screenshot');
   const url = 'https://' + host + (node.path === '/' ? '' : node.path);
   const realShot = screenshotMap[node.id];
   const realWire = wireframeMap[node.id];
+  const realVideo = videoMap[node.id];
 
-  // Hotspot list from real clickable elements (preferred) → findings → wireframe rects → fallback zones
-  const hotspots = useMemo(() => {
-    // Real interactive elements from the crawler — one hotspot per element
-    if (nodeElements.length > 0) {
-      return nodeElements.map((el, i) => ({
-        nodeId: node.id, nodeLabel: node.label,
-        severity: 'low' as const, message: el.label, rule: el.href || '',
-        rect: el.bbox,
-        borderRadius: el.borderRadius ?? 0,
-        n: i + 1, sev: el.type,
-        label: el.label, // 'btn' | 'nav' | 'lnk' | 'crd'
-      }));
-    }
-    // Accessibility/UX findings mapped to wireframe geometry
-    const rectPool = (() => {
-      if (realWire) {
-        const parsed = parseWireframeRects(realWire);
-        if (parsed.length >= 2) return parsed;
-      }
-      return FALLBACK_RECTS;
-    })();
-    if (nodeFindings.length > 0) {
-      return nodeFindings.map((f, i) => ({
-        ...f,
-        rect: rectPool[i % rectPool.length],
-        borderRadius: 0,
-        n: i + 1,
-        sev: f.severity === 'medium' ? 'med' : f.severity,
-        label: `#${i + 1} · ${f.severity === 'medium' ? 'med' : f.severity}`,
-      }));
-    }
-    // No data — neutral zone outlines so the overlay is always visible on real screens
-    return rectPool.slice(0, 5).map((rect, i) => ({
-      nodeId: node.id, nodeLabel: node.label,
-      severity: 'low' as const, message: 'No issues found', rule: '',
-      rect, borderRadius: 0, n: i + 1, sev: 'clean',
-      label: `zone ${i + 1}`,
-    }));
-  }, [nodeElements, nodeFindings, realWire, node.id, node.label]);
+  void nodeFindings; // findings shown in the list below, not as hotspots
 
   return (
     <div className="preview">
@@ -731,49 +781,80 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, nodeFindings, no
           <button className={'seg-btn ' + (view === 'wireframe' ? 'on' : '')} onClick={() => setView('wireframe')}>
             <IcLayers w={11} h={11}/> Wireframe
           </button>
+          {realVideo && (
+            <button className={'seg-btn ' + (view === 'video' ? 'on' : '')} onClick={() => setView('video')}>
+              <IcPlay w={11} h={11}/> Video
+            </button>
+          )}
         </div>
         <button
-          className={'chip-btn ' + (annotations ? 'on' : '')}
-          onClick={() => setAnnotations(a => !a)}
-          title="Show finding hotspots">
-          <IcTarget w={11} h={11}/> Hotspots
+          className={'chip-btn' + (nodeAnnotations.length > 0 ? ' on' : '')}
+          onClick={() => onAnnotate(view === 'video' ? 'screenshot' : view)}
+          title="Draw annotations on this screen">
+          <IcTarget w={11} h={11}/>
+          {nodeAnnotations.length > 0 ? `${nodeAnnotations.length} annotation${nodeAnnotations.length > 1 ? 's' : ''}` : 'Annotate'}
         </button>
       </div>
-      <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '') + (annotations ? '' : 'no-annot')}>
-        {view === 'wireframe'
-          ? realWire
-            ? <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: realWire }}/>
-            : realShot
-              ? <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: 'var(--fg-faint)' }}>
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ animation: 'spin 1.2s linear infinite' }}>
-                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-                  </svg>
-                  <span style={{ fontSize: 11 }}>Generating wireframe…</span>
-                </div>
-              : getWireframeForNode(node)
-          : realShot
-            ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
-            : getScreenshotForNode(node)}
-        {/* Hotspot overlay — always shown on real screenshots/wireframes */}
-        {annotations && (realShot || realWire) && (
-          <div className="hotspot-layer">
-            {hotspots.map(h => (
-              <div
-                key={h.n}
-                className={`hs-rect hs-${h.sev}`}
-                style={{
-                  left:   `${(h.rect.x / 1280) * 100}%`,
-                  top:    `${(h.rect.y / 900)  * 100}%`,
-                  width:  `${(h.rect.w / 1280) * 100}%`,
-                  height: `${(h.rect.h / 900)  * 100}%`,
-                  borderRadius: h.borderRadius > 0 ? `${h.borderRadius}px` : undefined,
-                }}
-                title={h.sev === 'clean' ? 'Analyzed — no issues' : `[${h.sev}] ${h.message || h.rule}`}
-              >
-                <span className="hs-rect-label">{h.label}</span>
+      <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '')}>
+        {view === 'video'
+          ? realVideo
+            ? <video
+                key={node.id}
+                src={realVideo}
+                controls
+                style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+              />
+            : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--fg-faint)', fontSize: 11 }}>
+                No recording available
               </div>
-            ))}
-          </div>
+          : view === 'wireframe'
+            ? realWire
+              ? <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: realWire }}/>
+              : realShot
+                ? <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: 'var(--fg-faint)' }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ animation: 'spin 1.2s linear infinite' }}>
+                      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                    <span style={{ fontSize: 11 }}>Generating wireframe…</span>
+                  </div>
+                : getWireframeForNode(node)
+            : realShot
+              ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
+              : getScreenshotForNode(node)}
+        {/* Read-only annotation overlay */}
+        {nodeAnnotations.length > 0 && (
+          <svg className="ann-preview-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {nodeAnnotations.map(ann => {
+              const shared = { fill: 'none', stroke: ann.color, strokeWidth: 0.5, strokeDasharray: '2 1' };
+              if (ann.shape === 'rect') {
+                return (
+                  <g key={ann.id}>
+                    <rect x={ann.x} y={ann.y} width={ann.w} height={ann.h} rx={0.4} {...shared}/>
+                    {ann.label && (
+                      <text x={ann.x + 0.5} y={ann.y + 3.8} fill={ann.color} fontSize={2.6}
+                        fontFamily="ui-monospace,monospace" fontWeight="700"
+                        style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                        {ann.label}
+                      </text>
+                    )}
+                  </g>
+                );
+              }
+              const cx = ann.x + ann.w / 2, cy = ann.y + ann.h / 2;
+              return (
+                <g key={ann.id}>
+                  <ellipse cx={cx} cy={cy} rx={ann.w / 2} ry={ann.h / 2} {...shared}/>
+                  {ann.label && (
+                    <text x={cx} y={ann.y - 0.5} fill={ann.color} fontSize={2.6}
+                      fontFamily="ui-monospace,monospace" fontWeight="700" textAnchor="middle"
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                      {ann.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
         )}
         <div className="preview-overlay">
           <span className="ovl-chip">
@@ -792,21 +873,25 @@ interface RightPanelProps {
   onClose: () => void;
   selectedNode: TreeNode;
   session: Session;
+  hostOverride?: string;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
+  videoMap: Record<string, string>;
   realFindings: RealFinding[];
   elementMap: Record<string, ClickableElement[]>;
+  annotationsMap: Record<string, ManualAnnotation[]>;
+  onAnnotate: (nodeId: string, nodeLabel: string, mode: 'screenshot' | 'wireframe') => void;
 }
 
-function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMap, realFindings, elementMap }: RightPanelProps) {
+function RightPanel({ onClose, selectedNode, session, hostOverride, screenshotMap, wireframeMap, videoMap, realFindings, elementMap, annotationsMap, onAnnotate }: RightPanelProps) {
   const node = selectedNode;
-  const host = session.host;
+  const host = hostOverride ?? session.host;
   const [tab, setTab] = useState<'findings' | 'tests' | 'scripts' | 'timeline'>('findings');
   const [catFilter, setCatFilter] = useState('all');
 
   // Use real findings if available for this node, else fall back to mock
   const nodeRealFindings = realFindings.filter(f => f.nodeId === node.id);
-  const nodeElements = elementMap[node.id] ?? [];
+  void (elementMap[node.id]); // elements retained for future use
   const hasRealFindings = realFindings.length > 0;
 
   const allFindings = hasRealFindings
@@ -862,7 +947,7 @@ function RightPanel({ onClose, selectedNode, session, screenshotMap, wireframeMa
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} nodeFindings={nodeRealFindings} nodeElements={nodeElements}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} videoMap={videoMap} nodeFindings={nodeRealFindings} nodeAnnotations={annotationsMap[node.id] ?? []} onAnnotate={mode => onAnnotate(node.id, node.label, mode)}/>
 
             <div className="sev-grid">
               <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
@@ -1320,17 +1405,18 @@ export default function Page() {
   // Real data state
   const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({});
   const [wireframeMap, setWireframeMap] = useState<Record<string, string>>({});
+  const [videoMap, setVideoMap] = useState<Record<string, string>>({});
   const [realFindings, setRealFindings] = useState<RealFinding[]>([]);
   const [elementMap, setElementMap] = useState<Record<string, ClickableElement[]>>({});
+  const [annotationsMap, setAnnotationsMap] = useState<Record<string, ManualAnnotation[]>>({});
+  const [annotatingNode, setAnnotatingNode] = useState<{ nodeId: string; mode: 'screenshot' | 'wireframe'; nodeLabel: string } | null>(null);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([...HISTORY]);
   const [agentSites, setAgentSites] = useState<AgentSite[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
 
-  // Lifted agent targets
-  const [agentTargets, setAgentTargets] = useState<UITarget[]>(
-    AGENT_RUN.sites.map(s => ({ id: s.id, url: s.url, name: s.name, env: s.env, state: s.state }))
-  );
+  // Lifted agent targets — start empty so only user-added sites run
+  const [agentTargets, setAgentTargets] = useState<UITarget[]>([]);
 
   // Session store: historyId → full session data (for restoration)
   const sessionStoreRef = useRef<Map<string, StoredSession>>(new Map());
@@ -1384,7 +1470,8 @@ export default function Page() {
     durationMs: number,
     findings: RealFinding[],
     shots: Record<string, string>,
-    elMap: Record<string, ClickableElement[]> = {}
+    elMap: Record<string, ClickableElement[]> = {},
+    vids: Record<string, string> = {}
   ) => {
     const high = findings.filter(f => f.severity === 'high').length;
     const med  = findings.filter(f => f.severity === 'medium').length;
@@ -1407,8 +1494,10 @@ export default function Page() {
       session: newSession,
       screenshotMap: shots,
       wireframeMap: {},
+      videoMap: vids,
       realFindings: findings,
       elementMap: elMap,
+      annotationsMap: {},
     };
     sessionStoreRef.current.set(id, storedSession);
 
@@ -1419,6 +1508,19 @@ export default function Page() {
     setActiveHistory(id);
     return id;
   }, []);
+
+  const saveAnnotations = useCallback((nodeId: string, annotations: ManualAnnotation[]) => {
+    setAnnotationsMap(prev => {
+      const next = { ...prev, [nodeId]: annotations };
+      const stored = sessionStoreRef.current.get(activeHistory);
+      if (stored) {
+        const updated = { ...stored, annotationsMap: next };
+        sessionStoreRef.current.set(activeHistory, updated);
+        dbSet('canvas-session', activeHistory, updated).catch(() => {});
+      }
+      return next;
+    });
+  }, [activeHistory]);
 
   /* ─── Wireframe generation (parallel, progressive) ────────────────── */
 
@@ -1465,7 +1567,9 @@ export default function Page() {
     setRealFindings([]);
     setScreenshotMap({});
     setWireframeMap({});
+    setVideoMap({});
     setElementMap({});
+    setAnnotationsMap({});
 
     const t0 = Date.now();
     const auditUrl = targetUrl ?? url;
@@ -1506,6 +1610,7 @@ export default function Page() {
         edges: Array<{ source: string; target: string }>;
         screenshots: Record<string, string>;
         elementMap?: Record<string, ClickableElement[]>;
+        videoMap?: Record<string, string>;
         script: { events: Array<{ kind: string; nodeId?: string; severity?: string }> };
         meta: { origin: string; pagesScanned: number; durationMs: number };
       };
@@ -1529,10 +1634,12 @@ export default function Page() {
 
       const shots = data.screenshots || {};
       const elMap: Record<string, ClickableElement[]> = data.elementMap || {};
+      const vids: Record<string, string> = data.videoMap || {};
 
       setSession(newSession);
       setSelectedNodeId(tree.id);
       setScreenshotMap(shots);
+      setVideoMap(vids);
       setRealFindings(findings);
       setElementMap(elMap);
       setDiscoveredIds(null);
@@ -1541,7 +1648,7 @@ export default function Page() {
       setCrawlProgress({ current: null, done: data.meta.pagesScanned, total: data.meta.pagesScanned });
       setShowPanel(true);
 
-      const historyId = addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots, elMap);
+      const historyId = addToHistory(canonicalUrl, newSession, Date.now() - t0, findings, shots, elMap, vids);
 
       // Fire parallel AI wireframe generation for each captured page
       if (Object.keys(shots).length > 0) {
@@ -1670,6 +1777,20 @@ export default function Page() {
 
       setAgentSites(finalSites);
 
+      // Collect screenshots from all runs into screenshotMap so Annotate works
+      const agentShots: Record<string, string> = {};
+      for (const run of allRuns) {
+        for (const n of run.crawlResult?.nodes || []) {
+          if (n.screenshot) agentShots[n.id] = n.screenshot;
+        }
+        for (const p of run.partialCrawl || []) {
+          if (p.screenshot) agentShots[p.id] = p.screenshot;
+        }
+      }
+      if (Object.keys(agentShots).length > 0) {
+        setScreenshotMap(prev => ({ ...prev, ...agentShots }));
+      }
+
       // Add each run to history
       const t0 = Date.now();
       for (let i = 0; i < allRuns.length; i++) {
@@ -1726,8 +1847,10 @@ export default function Page() {
     setSelectedNodeId(stored.session.tree.id);
     setScreenshotMap(stored.screenshotMap);
     setWireframeMap(stored.wireframeMap || {});
+    setVideoMap(stored.videoMap || {});
     setRealFindings(stored.realFindings);
     setElementMap(stored.elementMap || {});
+    setAnnotationsMap(stored.annotationsMap || {});
     setDiscoveredIds(null);
     setStatusOverrides({});
     setDefectOverrides({});
@@ -1760,6 +1883,17 @@ export default function Page() {
     for (const s of AGENT_RUN.sites) { n = findNodeInTree(s.tree, selectedNodeId); if (n) return n; }
     return session.tree;
   }, [session, selectedNodeId, agentSites]);
+
+  // In multi-site mode resolve host from whichever AgentSite owns the selected node
+  const selectedNodeHost = useMemo(() => {
+    const allSites = agentSites.length > 0 ? agentSites : AGENT_RUN.sites;
+    for (const s of allSites) {
+      if (findNodeInTree(s.tree, selectedNodeId)) {
+        try { return new URL(s.url.startsWith('http') ? s.url : 'https://' + s.url).hostname; } catch { return s.url; }
+      }
+    }
+    return session.host;
+  }, [selectedNodeId, agentSites, session.host]);
 
   return (
     <div className="app">
@@ -1810,14 +1944,29 @@ export default function Page() {
                 onClose={() => setShowPanel(false)}
                 selectedNode={selectedNode}
                 session={session}
+                hostOverride={runMode === 'multi' ? selectedNodeHost : undefined}
                 screenshotMap={screenshotMap}
                 wireframeMap={wireframeMap}
+                videoMap={videoMap}
                 realFindings={realFindings}
                 elementMap={elementMap}
+                annotationsMap={annotationsMap}
+                onAnnotate={(nodeId, nodeLabel, mode) => setAnnotatingNode({ nodeId, mode, nodeLabel })}
               />
             : null}
       </div>
       {folderOpen && <FolderMenu onClose={() => setFolderOpen(false)} onStartWebAudit={u => { setFolderOpen(false); startAudit(u); }}/>}
+      {annotatingNode && (
+        <AnnotationEditor
+          imageUrl={screenshotMap[annotatingNode.nodeId]}
+          wireframeSvg={wireframeMap[annotatingNode.nodeId]}
+          mode={annotatingNode.mode}
+          nodeLabel={annotatingNode.nodeLabel}
+          initial={annotationsMap[annotatingNode.nodeId] ?? []}
+          onSave={annotations => saveAnnotations(annotatingNode.nodeId, annotations)}
+          onClose={() => setAnnotatingNode(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,8 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as nodePath from "path";
 import { AxeBuilder } from "@axe-core/playwright";
-import { type Browser, type BrowserContext, type Page } from "playwright";
+import { type Browser, type BrowserContext, type Page, type Video } from "playwright-core";
 import { launchBrowser } from "./browser";
 
 export type ClickableElement = {
@@ -34,6 +37,7 @@ export type CrawlResult = {
   endedAt: number;
   pages: CrawlPage[];
   edges: { source: string; target: string }[];
+  videos?: Record<string, string>; // nodeId -> base64 webm data URL (local only)
 };
 
 export type CrawlOptions = {
@@ -41,13 +45,14 @@ export type CrawlOptions = {
   perPageTimeoutMs?: number;
   totalTimeoutMs?: number;
   viewport?: { width: number; height: number };
+  includeVideo?: boolean;
   onPage?: (page: CrawlPage, crawledSoFar: number) => void | Promise<void>;
 };
 
 // Vercel serverless has a 120s hard kill limit; stay well under it.
 const IS_VERCEL = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-const DEFAULT_OPTIONS: Omit<Required<CrawlOptions>, "onPage"> = {
+const DEFAULT_OPTIONS: Omit<Required<CrawlOptions>, "onPage" | "includeVideo"> = {
   maxPages: 8,
   perPageTimeoutMs: IS_VERCEL ? 10000 : 18000,
   totalTimeoutMs: IS_VERCEL ? 50000 : 90000,
@@ -176,6 +181,14 @@ export async function crawlSite(
   const pages: CrawlPage[] = [];
   const edges: { source: string; target: string }[] = [];
 
+  // Video recording: local only (Vercel has no VP8/VP9 encoder in @sparticuz/chromium)
+  const videoDir = (!IS_VERCEL && opts.includeVideo)
+    ? nodePath.join(os.tmpdir(), `crawl-vid-${startedAt}`)
+    : null;
+  if (videoDir) fs.mkdirSync(videoDir, { recursive: true });
+  const pageVideoRefs = new Map<string, Video>();
+  const videos: Record<string, string> = {};
+
   try {
     browser = await launchBrowser();
     // Slight viewport jitter so every run looks different to fingerprinters
@@ -194,6 +207,7 @@ export async function crawlSite(
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
       },
+      ...(videoDir ? { recordVideo: { dir: videoDir, size: { width: vw, height: vh } } } : {}),
     });
     await context.addInitScript(STEALTH_INIT_SCRIPT);
 
@@ -266,6 +280,10 @@ export async function crawlSite(
           edges.push({ source: next.parentId, target: nodeId });
         }
       } finally {
+        if (videoDir) {
+          const vid = page.video();
+          if (vid) pageVideoRefs.set(nodeId, vid);
+        }
         await page.close().catch(() => {});
       }
     }
@@ -300,6 +318,21 @@ export async function crawlSite(
     }
 
     await context.close();
+
+    // After context.close(), video files are finalised — collect them
+    if (videoDir && pageVideoRefs.size > 0) {
+      for (const [nodeId, vid] of pageVideoRefs) {
+        try {
+          const vpath = await vid.path();
+          const buf = fs.readFileSync(vpath);
+          // Skip videos larger than 8 MB to stay within reasonable response bounds
+          if (buf.length <= 8 * 1024 * 1024) {
+            videos[nodeId] = `data:video/webm;base64,${buf.toString("base64")}`;
+          }
+        } catch { /* best-effort */ }
+      }
+      try { fs.rmSync(videoDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -310,6 +343,7 @@ export async function crawlSite(
     endedAt: Date.now(),
     pages,
     edges,
+    ...(Object.keys(videos).length > 0 ? { videos } : {}),
   };
 }
 
