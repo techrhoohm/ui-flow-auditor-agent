@@ -1698,6 +1698,33 @@ export default function Page() {
   const [agentOpen, setAgentOpen] = useState(false);
   const [runMode, setRunMode] = useState<'single' | 'multi'>('single');
 
+  // Panel widths — draggable like VS Code
+  const [leftW, setLeftW] = useState(280);
+  const [rightW, setRightW] = useState(400);
+
+  function startResize(side: 'left' | 'right') {
+    return (e: React.MouseEvent) => {
+      e.preventDefault();
+      let lastX = e.clientX;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMove = (ev: MouseEvent) => {
+        const dx = ev.clientX - lastX;
+        lastX = ev.clientX;
+        if (side === 'left') setLeftW(w => Math.max(180, Math.min(520, w + dx)));
+        else setRightW(w => Math.max(300, Math.min(700, w - dx)));
+      };
+      const onUp = () => {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    };
+  }
+
   // Real data state
   const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({});
   const [wireframeMap, setWireframeMap] = useState<Record<string, string>>({});
@@ -2220,7 +2247,7 @@ export default function Page() {
     return { pages, depth, findings };
   }, [session, discoveredIds, defectOverrides]);
 
-  const cols = `280px 1fr ${(showPanel || agentOpen) ? '400px' : '0px'}`;
+  const cols = `${leftW}px 1fr ${(showPanel || agentOpen) ? rightW + 'px' : '0px'}`;
 
   const selectedNode = useMemo(() => {
     let n = findNodeInTree(session.tree, selectedNodeId);
@@ -2252,7 +2279,13 @@ export default function Page() {
         agentOpen={agentOpen}
         auditError={auditError}
       />
-      <div className="stage" style={{ gridTemplateColumns: cols }}>
+      <div className="stage" style={{ gridTemplateColumns: cols, position: 'relative' }}>
+        {/* Left sidebar resize handle */}
+        <div className="rh" style={{ left: leftW - 2 }} onMouseDown={startResize('left')} />
+        {/* Right panel resize handle */}
+        {(showPanel || agentOpen) && (
+          <div className="rh" style={{ right: rightW - 2 }} onMouseDown={startResize('right')} />
+        )}
         <Sidebar
           activeId={activeHistory}
           setActiveId={setActiveHistory}

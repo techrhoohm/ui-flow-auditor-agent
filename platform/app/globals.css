@@ -193,6 +193,18 @@ body {
   height: 100%;
 }
 
+/* === Resize handles (VS Code-style) ======================================= */
+.rh {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 50;
+  background: transparent;
+  transition: background .15s;
+}
+.rh:hover { background: color-mix(in oklab, var(--accent) 45%, transparent); }
+
 /* === Left sidebar ========================================================== */
 .sidebar {
   background: var(--bg-elev);
@@ -690,8 +702,8 @@ html[data-theme="light"] .nora-fig {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
-  flex-wrap: nowrap;
-  overflow: hidden;
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 .preview-seg { width: auto; padding: 2px; }
 .preview-seg .seg-btn { padding: 4px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
