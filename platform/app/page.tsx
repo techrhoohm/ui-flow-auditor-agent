@@ -789,6 +789,41 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFi
 
   void nodeFindings; // findings shown in the list below, not as hotspots
 
+  const annOverlay = nodeAnnotations.length > 0 ? (
+    <svg className="ann-preview-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+      {nodeAnnotations.map(ann => {
+        const shared = { fill: 'none', stroke: ann.color, strokeWidth: 0.5, strokeDasharray: '2 1' };
+        if (ann.shape === 'rect') {
+          return (
+            <g key={ann.id}>
+              <rect x={ann.x} y={ann.y} width={ann.w} height={ann.h} rx={0.4} {...shared}/>
+              {ann.label && (
+                <text x={ann.x + 0.5} y={ann.y - 0.8} fill={ann.color} fontSize={2.6}
+                  fontFamily="ui-monospace,monospace" fontWeight="700"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                  {ann.label}
+                </text>
+              )}
+            </g>
+          );
+        }
+        const cx = ann.x + ann.w / 2;
+        return (
+          <g key={ann.id}>
+            <ellipse cx={cx} cy={ann.y + ann.h / 2} rx={ann.w / 2} ry={ann.h / 2} {...shared}/>
+            {ann.label && (
+              <text x={ann.x + ann.w + 0.5} y={ann.y + 3} fill={ann.color} fontSize={2.6}
+                fontFamily="ui-monospace,monospace" fontWeight="700"
+                style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                {ann.label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  ) : null;
+
   return (
     <div className="preview">
       <div className="preview-bar">
@@ -844,43 +879,14 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFi
                   </div>
                 : getWireframeForNode(node)
             : realShot
-              ? <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
-              : getScreenshotForNode(node)}
-        {/* Read-only annotation overlay */}
-        {nodeAnnotations.length > 0 && (
-          <svg className="ann-preview-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {nodeAnnotations.map(ann => {
-              const shared = { fill: 'none', stroke: ann.color, strokeWidth: 0.5, strokeDasharray: '2 1' };
-              if (ann.shape === 'rect') {
-                return (
-                  <g key={ann.id}>
-                    <rect x={ann.x} y={ann.y} width={ann.w} height={ann.h} rx={0.4} {...shared}/>
-                    {ann.label && (
-                      <text x={ann.x + 0.5} y={ann.y + 3.8} fill={ann.color} fontSize={2.6}
-                        fontFamily="ui-monospace,monospace" fontWeight="700"
-                        style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                        {ann.label}
-                      </text>
-                    )}
-                  </g>
-                );
-              }
-              const cx = ann.x + ann.w / 2, cy = ann.y + ann.h / 2;
-              return (
-                <g key={ann.id}>
-                  <ellipse cx={cx} cy={cy} rx={ann.w / 2} ry={ann.h / 2} {...shared}/>
-                  {ann.label && (
-                    <text x={cx} y={ann.y - 0.5} fill={ann.color} fontSize={2.6}
-                      fontFamily="ui-monospace,monospace" fontWeight="700" textAnchor="middle"
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                      {ann.label}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-        )}
+              ? <div style={{ position: 'relative', lineHeight: 0 }}>
+                  <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
+                  {annOverlay}
+                </div>
+              : <div style={{ position: 'relative', lineHeight: 0 }}>
+                  {getScreenshotForNode(node)}
+                  {annOverlay}
+                </div>}
         <div className="preview-overlay">
           <span className="ovl-chip">
             <span className="live-dot go"/>
