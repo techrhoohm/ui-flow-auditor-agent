@@ -2055,6 +2055,7 @@ export default function Page() {
       dbSet('canvas-session', groupId, groupStored).catch(() => {});
       setHistoryItems(prev => [groupItem, ...prev].slice(0, 20));
       setActiveHistory(groupId);
+      setRealFindings(allFindings);
 
       if (Object.keys(agentShots).length > 0) {
         generateWireframes(agentShots, groupId);
