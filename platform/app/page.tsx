@@ -133,13 +133,17 @@ function buildTreeFromCrawlResult(cr: BackendRun['crawlResult'], prefix = ''): T
     else if (f.severity === 'medium') defectsMap[f.nodeId].ui++;
     else defectsMap[f.nodeId].a11y++;
   }
+  const blockedNodeIds = new Set(
+    cr.findings.filter(f => f.rule === 'automation-blocked').map(f => f.nodeId)
+  );
   const nodeMap = new Map<string, TreeNode>();
   cr.nodes.forEach((n, i) => {
     let path = '/';
     try { path = new URL(n.url).pathname || '/'; } catch { /* keep '/' */ }
     nodeMap.set(n.id, {
       id: prefix + n.id, tag: i === 0 ? 'Entry' : 'Page',
-      label: n.label, path, status: 'done',
+      label: n.label, path,
+      status: blockedNodeIds.has(n.id) ? 'blocked' : 'done',
       defects: defectsMap[n.id] || { ux: 0, ui: 0, a11y: 0 },
       children: [],
     });

@@ -138,8 +138,9 @@ async function runTarget(
     run.state = "analyzing";
     await upsertRun(run);
 
+    // Carry page.id directly — avoids fragile reverse-lookup by title/url
     const allFindings = crawl.pages.flatMap((p) =>
-      p.findings.map((f) => ({ ...f, nodeLabel: p.title || p.url }))
+      p.findings.map((f) => ({ ...f, pageId: p.id, nodeLabel: p.title || p.url }))
     );
     const filtered = allFindings.filter((f) => {
       const rank = { low: 1, medium: 2, high: 3 };
@@ -152,14 +153,14 @@ async function runTarget(
     run.crawlResult = {
       nodes: crawl.pages.map((p, i) => ({
         id: p.id,
-        label: p.title || new URL(p.url).pathname || "/",
+        label: p.title || (() => { try { return new URL(p.url).pathname || "/"; } catch { return "/"; } })(),
         url: p.url,
         position: { x: 80 + (i % 3) * 320, y: 80 + Math.floor(i / 3) * 240 },
         screenshot: p.screenshot ?? null,
       })),
       edges: crawl.edges.map((e) => ({ source: e.source, target: e.target })),
       findings: filtered.map((f) => ({
-        nodeId: crawl.pages.find((p) => (p.title || p.url) === f.nodeLabel)?.id ?? "",
+        nodeId: f.pageId,   // direct — no reverse-lookup
         nodeLabel: f.nodeLabel,
         severity: f.severity,
         message: f.message,
