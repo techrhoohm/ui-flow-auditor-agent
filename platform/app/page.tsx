@@ -772,22 +772,106 @@ function Canvas({ session, selectedNodeId, setSelectedNodeId, collapsedIds, onTo
 
 /* ─────────────────────────── PreviewCard ─────────────────────────────── */
 
-function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFindings, nodeAnnotations, onAnnotate }: {
+type Hotspot = {
+  n: number; sev: string; label: string; message: string;
+  rect: { x: number; y: number; w: number; h: number };
+  borderRadius: number;
+};
+function HotspotLayer({ hotspots }: { hotspots: Hotspot[] }) {
+  return (
+    <div className="hotspot-layer">
+      {hotspots.map(h => (
+        <div
+          key={h.n}
+          className={`hs-rect hs-${h.sev}`}
+          style={{
+            left:   `${(h.rect.x / 1280) * 100}%`,
+            top:    `${(h.rect.y / 900)  * 100}%`,
+            width:  `${(h.rect.w / 1280) * 100}%`,
+            height: `${(h.rect.h / 900)  * 100}%`,
+            borderRadius: h.borderRadius > 0 ? `${h.borderRadius}px` : undefined,
+          }}
+          title={h.sev === 'clean' ? 'Analyzed — no issues' : `[${h.sev}] ${h.message || ''}`}
+        >
+          <span className="hs-rect-label">{h.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const FALLBACK_RECTS = [
+  { x: 0,   y: 0,   w: 1280, h: 56  },
+  { x: 120, y: 90,  w: 1040, h: 130 },
+  { x: 320, y: 250, w: 180,  h: 46  },
+  { x: 520, y: 250, w: 180,  h: 46  },
+  { x: 80,  y: 370, w: 360,  h: 210 },
+  { x: 460, y: 370, w: 360,  h: 210 },
+  { x: 840, y: 370, w: 360,  h: 210 },
+  { x: 80,  y: 190, w: 1100, h: 46  },
+  { x: 0,   y: 830, w: 1280, h: 70  },
+  { x: 160, y: 600, w: 280,  h: 44  },
+  { x: 460, y: 600, w: 360,  h: 44  },
+];
+
+function parseWireframeRects(svg: string): Array<{x:number;y:number;w:number;h:number}> {
+  const out: Array<{x:number;y:number;w:number;h:number}> = [];
+  const re = /<rect\b([^/>'"]|"[^"]*"|'[^']*')*?\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(svg)) !== null) {
+    const el = m[0];
+    const num = (attr: string) => parseFloat(el.match(new RegExp(`\\b${attr}="([^"]+)"`))?.[1] ?? '0');
+    const x = num('x'), y = num('y'), w = num('width'), h = num('height');
+    if (w > 50 && h > 18 && w < 1240 && h < 700) out.push({ x, y, w, h });
+  }
+  return out;
+}
+
+function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFindings, nodeElements, nodeAnnotations, onAnnotate }: {
   node: TreeNode; host: string;
   screenshotMap: Record<string, string>;
   wireframeMap: Record<string, string>;
   videoMap: Record<string, string>;
   nodeFindings: RealFinding[];
+  nodeElements: ClickableElement[];
   nodeAnnotations: ManualAnnotation[];
   onAnnotate: (mode: 'screenshot' | 'wireframe') => void;
 }) {
   const [view, setView] = useState<'screenshot' | 'wireframe' | 'video'>('screenshot');
+  const [showHotspots, setShowHotspots] = useState(true);
   const url = 'https://' + host + (node.path === '/' ? '' : node.path);
   const realShot = screenshotMap[node.id];
   const realWire = wireframeMap[node.id];
   const realVideo = videoMap[node.id];
 
-  void nodeFindings; // findings shown in the list below, not as hotspots
+  const hotspots = useMemo(() => {
+    if (nodeElements.length > 0) {
+      return nodeElements.map((el, i) => ({
+        nodeId: node.id, nodeLabel: node.label,
+        severity: 'low' as const, message: el.label, rule: el.href || '',
+        rect: el.bbox, borderRadius: el.borderRadius ?? 0,
+        n: i + 1, sev: el.type, label: el.label,
+      }));
+    }
+    const rectPool = (() => {
+      if (realWire) { const p = parseWireframeRects(realWire); if (p.length >= 2) return p; }
+      return FALLBACK_RECTS;
+    })();
+    if (nodeFindings.length > 0) {
+      return nodeFindings.map((f, i) => ({
+        ...f,
+        rect: rectPool[i % rectPool.length],
+        borderRadius: 0, n: i + 1,
+        sev: f.severity === 'medium' ? 'med' : f.severity,
+        label: `#${i + 1} · ${f.severity === 'medium' ? 'med' : f.severity}`,
+      }));
+    }
+    return rectPool.slice(0, 5).map((rect, i) => ({
+      nodeId: node.id, nodeLabel: node.label,
+      severity: 'low' as const, message: 'No issues found', rule: '',
+      rect, borderRadius: 0, n: i + 1, sev: 'clean', label: `zone ${i + 1}`,
+    }));
+  }, [nodeElements, nodeFindings, realWire, node.id, node.label]);
 
   const annOverlay = nodeAnnotations.length > 0 ? (
     <svg className="ann-preview-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -847,15 +931,22 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFi
             </button>
           )}
         </div>
-        <button
-          className={'chip-btn' + (nodeAnnotations.length > 0 ? ' on' : '')}
-          onClick={() => onAnnotate(view === 'video' ? 'screenshot' : view)}
-          title="Draw annotations on this screen">
-          <IcTarget w={11} h={11}/>
-          {nodeAnnotations.length > 0 ? `${nodeAnnotations.length} annotation${nodeAnnotations.length > 1 ? 's' : ''}` : 'Annotate'}
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className={'chip-btn' + (showHotspots ? ' on' : '')}
+            onClick={() => setShowHotspots(s => !s)}
+            title="Toggle agent-detected element hotspots">
+            <IcTarget w={11} h={11}/> Hotspots
+          </button>
+          <button
+            className={'chip-btn' + (nodeAnnotations.length > 0 ? ' on' : '')}
+            onClick={() => onAnnotate(view === 'video' ? 'screenshot' : view)}
+            title="Draw annotations on this screen">
+            ✏ {nodeAnnotations.length > 0 ? `${nodeAnnotations.length} annotation${nodeAnnotations.length > 1 ? 's' : ''}` : 'Annotate'}
+          </button>
+        </div>
       </div>
-      <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '')}>
+      <div className={'preview-img ' + (view === 'screenshot' ? 'is-screenshot ' : '') + (showHotspots ? '' : 'no-annot ')}>
         {view === 'video'
           ? realVideo
             ? <video
@@ -869,7 +960,11 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFi
               </div>
           : view === 'wireframe'
             ? realWire
-              ? <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: realWire }}/>
+              ? <div style={{ position: 'relative', lineHeight: 0 }}>
+                  <div dangerouslySetInnerHTML={{ __html: realWire }}/>
+                  {showHotspots && <HotspotLayer hotspots={hotspots} />}
+                  {annOverlay}
+                </div>
               : realShot
                 ? <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: 'var(--fg-faint)' }}>
                     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ animation: 'spin 1.2s linear infinite' }}>
@@ -881,10 +976,12 @@ function PreviewCard({ node, host, screenshotMap, wireframeMap, videoMap, nodeFi
             : realShot
               ? <div style={{ position: 'relative', lineHeight: 0 }}>
                   <img src={realShot} alt={node.label} style={{ display: 'block', width: '100%' }}/>
+                  {showHotspots && <HotspotLayer hotspots={hotspots} />}
                   {annOverlay}
                 </div>
               : <div style={{ position: 'relative', lineHeight: 0 }}>
                   {getScreenshotForNode(node)}
+                  {showHotspots && <HotspotLayer hotspots={hotspots} />}
                   {annOverlay}
                 </div>}
         <div className="preview-overlay">
@@ -922,7 +1019,6 @@ function RightPanel({ onClose, selectedNode, session, hostOverride, screenshotMa
 
   // Use real findings if available for this node, else fall back to mock
   const nodeRealFindings = realFindings.filter(f => f.nodeId === node.id);
-  void (elementMap[node.id]); // elements retained for future use
   const hasRealFindings = realFindings.length > 0;
 
   const allFindings = hasRealFindings
@@ -978,7 +1074,7 @@ function RightPanel({ onClose, selectedNode, session, hostOverride, screenshotMa
       <div className="rp-body">
         {tab === 'findings' && (
           <>
-            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} videoMap={videoMap} nodeFindings={nodeRealFindings} nodeAnnotations={annotationsMap[node.id] ?? []} onAnnotate={mode => onAnnotate(node.id, node.label, mode)}/>
+            <PreviewCard node={node} host={host} screenshotMap={screenshotMap} wireframeMap={wireframeMap} videoMap={videoMap} nodeFindings={nodeRealFindings} nodeElements={elementMap[node.id] ?? []} nodeAnnotations={annotationsMap[node.id] ?? []} onAnnotate={mode => onAnnotate(node.id, node.label, mode)}/>
 
             <div className="sev-grid">
               <div className="sev-card sev-high"><div className="sev-label">High</div><div className="sev-num">{totals.high}</div></div>
